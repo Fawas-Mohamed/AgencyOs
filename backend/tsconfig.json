@@ -16,14 +16,6 @@
     "strict": true,
     "strictPropertyInitialization": false
   },
-  "include": [
-    "src/**/*.ts",
-    "prisma/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "test",
-    "**/*.spec.ts"
-  ]
+  "include": ["src/**/*.ts", "prisma/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
 }

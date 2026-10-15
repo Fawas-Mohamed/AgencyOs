@@ -9,9 +9,16 @@ export const TRANSITIONS: Record<RequirementStatus, readonly RequirementStatus[]
   ARCHIVED: [],
 };
 export function assertTransition(from: RequirementStatus, to: RequirementStatus, reason?: string) {
-  if (!TRANSITIONS[from].includes(to)) throw new ApiError(409, 'INVALID_TRANSITION', 'This status transition is not allowed');
-  if ((to === 'CHANGES_REQUESTED' || to === 'ARCHIVED' || from === 'CONFIRMED') && !reason?.trim()) throw new ApiError(400, 'REASON_REQUIRED', 'Provide a reason for this action');
+  if (!TRANSITIONS[from].includes(to))
+    throw new ApiError(409, 'INVALID_TRANSITION', 'This status transition is not allowed');
+  if ((to === 'CHANGES_REQUESTED' || to === 'ARCHIVED' || from === 'CONFIRMED') && !reason?.trim())
+    throw new ApiError(400, 'REASON_REQUIRED', 'Provide a reason for this action');
 }
 export function assertEditable(status: RequirementStatus) {
-  if (!EDITABLE.includes(status)) throw new ApiError(409, 'CONTENT_LOCKED', 'Reopen the requirement before changing agreed content');
+  if (!EDITABLE.includes(status))
+    throw new ApiError(
+      409,
+      'CONTENT_LOCKED',
+      'Reopen the requirement before changing agreed content',
+    );
 }
