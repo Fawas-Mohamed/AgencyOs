@@ -1,0 +1,244 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum ClientStatus {
+  ACTIVE
+  ARCHIVED
+}
+enum RequirementStatus {
+  DRAFT
+  UNDER_REVIEW
+  CONFIRMED
+  CHANGES_REQUESTED
+  ARCHIVED
+}
+enum ItemPriority {
+  LOW
+  MEDIUM
+  HIGH
+  MUST_HAVE
+}
+enum CommunicationType {
+  CALL
+  EMAIL
+  MEETING
+  WHATSAPP_MESSAGE
+  VIDEO_MEETING
+  OTHER
+}
+model Agency {
+  id String @id @default(uuid()) @db.Uuid
+  name String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users User[]
+  roles Role[]
+  clients Client[]
+}
+model Permission {
+  key String @id
+  description String
+  roles RolePermission[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model Role {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  name String
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Restrict)
+  permissions RolePermission[]
+  users User[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([id, agencyId])
+  @@unique([agencyId, name])
+}
+model RolePermission {
+  roleId String @db.Uuid
+  permissionKey String
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
+  @@id([roleId, permissionKey])
+}
+model User {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  roleId String @db.Uuid
+  email String @unique
+  displayName String
+  active Boolean @default(true)
+  passwordHash String?
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Restrict)
+  role Role @relation(fields: [roleId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  preparedRequirements ClientRequirement[] @relation("PreparedBy")
+  confirmedRequirements ClientRequirement[] @relation("ConfirmedBy")
+  revisions RequirementRevision[]
+  notes ClientNote[]
+  communications ClientCommunication[]
+  files ClientFile[]
+  auditLogs AuditLog[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([id, agencyId])
+}
+model Client {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  name String
+  company String
+  contactName String
+  email String?
+  phone String?
+  website String?
+  status ClientStatus @default(ACTIVE)
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Restrict)
+  requirements ClientRequirement[]
+  notes ClientNote[]
+  communications ClientCommunication[]
+  files ClientFile[]
+  auditLogs AuditLog[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([id, agencyId])
+  @@index([agencyId, updatedAt])
+}
+model ClientRequirement {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  clientId String @db.Uuid
+  title String
+  objective String
+  services String[]
+  designPreferences String @default("")
+  referenceLinks String[]
+  constraints String @default("")
+  assumptions String @default("")
+  internalRecommendations String @default("")
+  clientNotes String @default("")
+  timeline String @default("")
+  targetDate DateTime? @db.Date
+  budgetMin Decimal? @db.Decimal(18, 2)
+  budgetMax Decimal? @db.Decimal(18, 2)
+  currency String? @db.Char(3)
+  status RequirementStatus @default(DRAFT)
+  version Int @default(1)
+  lockVersion Int @default(1)
+  preparedById String @db.Uuid
+  confirmedById String? @db.Uuid
+  confirmedAt DateTime?
+  client Client @relation(fields: [clientId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  preparedBy User @relation("PreparedBy", fields: [preparedById, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  confirmedBy User? @relation("ConfirmedBy", fields: [confirmedById, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  items RequirementItem[]
+  revisions RequirementRevision[]
+  notes ClientNote[]
+  communications ClientCommunication[]
+  files ClientFile[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([id, agencyId])
+  @@unique([id, clientId, agencyId])
+  @@index([agencyId, clientId, status, updatedAt])
+}
+model RequirementItem {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  requirementId String @db.Uuid
+  title String
+  description String @default("")
+  category String @default("")
+  priority ItemPriority @default(MEDIUM)
+  notes String @default("")
+  position Int
+  requirement ClientRequirement @relation(fields: [requirementId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([requirementId, position])
+}
+model RequirementRevision {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  requirementId String @db.Uuid
+  version Int
+  snapshot Json
+  confirmedById String @db.Uuid
+  confirmedAt DateTime
+  requirement ClientRequirement @relation(fields: [requirementId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  confirmedBy User @relation(fields: [confirmedById, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([requirementId, version])
+}
+model ClientNote {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  clientId String @db.Uuid
+  requirementId String? @db.Uuid
+  body String
+  createdById String @db.Uuid
+  client Client @relation(fields: [clientId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  requirement ClientRequirement? @relation(fields: [requirementId, clientId, agencyId], references: [id, clientId, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdBy User @relation(fields: [createdById, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([agencyId, clientId, createdAt])
+}
+model ClientCommunication {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  clientId String @db.Uuid
+  requirementId String? @db.Uuid
+  type CommunicationType
+  subject String
+  summary String
+  participants String[]
+  followUp String @default("")
+  occurredAt DateTime
+  createdById String @db.Uuid
+  client Client @relation(fields: [clientId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  requirement ClientRequirement? @relation(fields: [requirementId, clientId, agencyId], references: [id, clientId, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdBy User @relation(fields: [createdById, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([agencyId, clientId, occurredAt])
+}
+model ClientFile {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  clientId String @db.Uuid
+  requirementId String? @db.Uuid
+  originalName String
+  mimeType String?
+  size Int?
+  storageKey String? @unique
+  referenceUrl String?
+  uploadedById String @db.Uuid
+  archivedAt DateTime?
+  client Client @relation(fields: [clientId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  requirement ClientRequirement? @relation(fields: [requirementId, clientId, agencyId], references: [id, clientId, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  uploadedBy User @relation(fields: [uploadedById, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([agencyId, clientId, createdAt])
+}
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+  agencyId String @db.Uuid
+  clientId String @db.Uuid
+  actorId String @db.Uuid
+  eventType String
+  entityType String
+  entityId String @db.Uuid
+  summary String
+  metadata Json?
+  client Client @relation(fields: [clientId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  actor User @relation(fields: [actorId, agencyId], references: [id, agencyId], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([agencyId, clientId, createdAt])
+}
