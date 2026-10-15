@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const values = Object.fromEntries(
   readFileSync(path.join(root, 'backend/.env'), 'utf8')
@@ -16,6 +17,25 @@ const values = Object.fromEntries(
 const database = process.env.TEST_DATABASE_URL ?? values.TEST_DATABASE_URL;
 if (!database || !new URL(database).pathname.endsWith('_test'))
   throw new Error('A dedicated test database is required');
+async function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen({ port: 0, host: '::', ipv6Only: false }, () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('Port selection failed'));
+        return;
+      }
+      const port = address.port;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+const apiPort = await freePort();
+let webPort = await freePort();
+while (webPort === apiPort) webPort = await freePort();
 const env = {
   ...process.env,
   ...values,
@@ -24,7 +44,10 @@ const env = {
   NODE_ENV: 'test',
   DEMO_AUTH_ENABLED: 'true',
   JWT_SECRET: randomBytes(48).toString('hex'),
-  UI_ORIGIN: 'http://localhost:3001',
+  UI_ORIGIN: 'http://localhost:' + webPort,
+  UI_API_ORIGIN: 'http://127.0.0.1:' + apiPort,
+  UI_API_PORT: String(apiPort),
+  UI_WEB_PORT: String(webPort),
 };
 for (const args of [
   ['node_modules/prisma/build/index.js', 'migrate', 'deploy'],

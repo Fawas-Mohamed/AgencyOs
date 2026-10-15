@@ -1,6 +1,15 @@
 import { defineConfig } from '@playwright/test';
 const origin = process.env.UI_ORIGIN;
-if (!origin || !process.env.TEST_DATABASE_URL?.includes('_test'))
+const apiOrigin = process.env.UI_API_ORIGIN;
+const apiPort = process.env.UI_API_PORT;
+const webPort = process.env.UI_WEB_PORT;
+if (
+  !origin ||
+  !apiOrigin ||
+  !apiPort ||
+  !webPort ||
+  !process.env.TEST_DATABASE_URL?.includes('_test')
+)
   throw new Error('Run browser checks through node scripts/test-ui.mjs');
 export default defineConfig({
   testDir: './test',
@@ -26,7 +35,7 @@ export default defineConfig({
     {
       command: 'node dist/src/main.js',
       cwd: '../backend',
-      url: 'http://127.0.0.1:5001/api/auth/me',
+      url: apiOrigin + '/api/auth/me',
       reuseExistingServer: false,
       timeout: 30000,
       env: {
@@ -37,22 +46,18 @@ export default defineConfig({
         FRONTEND_URL: origin,
         NODE_ENV: 'test',
         DEMO_AUTH_ENABLED: 'true',
-        PORT: '5001',
+        PORT: apiPort,
         HOST: '127.0.0.1',
         STORAGE_ROOT: '.data/browser-files',
         MAX_FILE_BYTES: '5242880',
       },
     },
     {
-      command: 'node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3001',
+      command: 'node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port ' + webPort,
       url: origin + '/login',
       reuseExistingServer: false,
       timeout: 30000,
-      env: {
-        NODE_ENV: 'production',
-        API_INTERNAL_URL: 'http://127.0.0.1:5001/api',
-        APP_ORIGIN: origin,
-      },
+      env: { NODE_ENV: 'production', API_INTERNAL_URL: apiOrigin + '/api', APP_ORIGIN: origin },
     },
   ],
 });

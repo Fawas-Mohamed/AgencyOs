@@ -25,7 +25,7 @@ test('private session proxy and genuine empty/error states', async ({ page, cont
   await page.getByLabel('Filter clients').fill('No matching client ' + randomUUID());
   await expect(page.getByText('No clients found')).toBeVisible();
   await page.goto('/client-hub/clients/' + randomUUID());
-  await expect(page.getByRole('alert')).toContainText('Record not found');
+  await expect(page.getByRole('main').getByRole('alert')).toContainText('Record not found');
 });
 test('client, structured requirement, review, revision, communication, private file and timeline flow', async ({
   page,
@@ -55,11 +55,12 @@ test('client, structured requirement, review, revision, communication, private f
   await expect(page.getByLabel('Item title', { exact: true }).first()).toHaveValue(
     'Approval history',
   );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByLabel('Minimum budget', { exact: true }).fill('200.10');
   await page.getByLabel('Maximum budget', { exact: true }).fill('100.20');
   await page.getByLabel('Currency', { exact: true }).fill('LKR');
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText(
+  await expect(page.getByRole('main').getByRole('alert')).toContainText(
     'Minimum budget must not exceed maximum budget',
   );
   await page.getByLabel('Maximum budget', { exact: true }).fill('500.20');
@@ -109,13 +110,11 @@ test('client, structured requirement, review, revision, communication, private f
   ).toBeVisible();
   await page.goto(clientUrl + '?tab=files');
   await page.getByRole('button', { name: 'Upload file', exact: true }).click();
-  await page
-    .getByLabel('Supporting file', { exact: true })
-    .setInputFiles({
-      name: 'verified-brief.txt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from('A private client brief'),
-    });
+  await page.getByLabel('Supporting file', { exact: true }).setInputFiles({
+    name: 'verified-brief.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('A private client brief'),
+  });
   await page.getByLabel('Linked requirement', { exact: true }).selectOption(requirementId);
   await page.getByRole('button', { name: 'Upload privately', exact: true }).click();
   await expect(page.getByText('verified-brief.txt', { exact: true })).toBeVisible();

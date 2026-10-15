@@ -45,7 +45,7 @@ writeFileSync(
 );
 writeFileSync(
   paths[2],
-  'NEXT_PUBLIC_API_BASE_URL=/api\nAPI_INTERNAL_URL=http://127.0.0.1:5000/api\nAPP_ORIGIN=http://localhost:3000\n',
+  'NEXT_PUBLIC_API_BASE_URL=/api\nAPI_INTERNAL_URL=http://127.0.0.1:5000/api\nAPP_ORIGIN=http://localhost:3000\nNEXT_TELEMETRY_DISABLED=1\n',
   { flag: 'wx', mode: 0o600 },
 );
 console.log(

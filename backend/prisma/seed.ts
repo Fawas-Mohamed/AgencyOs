@@ -120,13 +120,11 @@ async function seed() {
     });
     if (!first) {
       first = await requirements.create(actor, client.id, content);
-      await app
-        .get(FilesService)
-        .createLink(actor, client.id, {
-          originalName: 'Discovery reference',
-          referenceUrl: 'https://example.com',
-          requirementId: first.id,
-        });
+      await app.get(FilesService).createLink(actor, client.id, {
+        originalName: 'Discovery reference',
+        referenceUrl: 'https://example.com',
+        requirementId: first.id,
+      });
       await requirements.changeStatus(actor, first.id, {
         status: 'UNDER_REVIEW',
         expectedVersion: first.lockVersion,
