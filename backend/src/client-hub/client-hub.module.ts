@@ -9,9 +9,29 @@ import { AccessService } from './access.service';
 import { FilesService } from './files.service';
 import { PrivateStorageService } from './private-storage.service';
 @Module({
-  imports:[MulterModule.registerAsync({inject:[ConfigService],useFactory:(config:ConfigService)=>({storage:memoryStorage(),limits:{fileSize:config.getOrThrow<number>('MAX_FILE_BYTES'),files:1,fields:1,parts:2,fieldSize:200}})})],
-  controllers:[ClientHubController],
-  providers:[ClientHubService,RequirementsService,AccessService,FilesService,PrivateStorageService],
-  exports:[ClientHubService,RequirementsService,FilesService],
+  imports: [
+    MulterModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        storage: memoryStorage(),
+        limits: {
+          fileSize: config.getOrThrow<number>('MAX_FILE_BYTES'),
+          files: 1,
+          fields: 1,
+          parts: 2,
+          fieldSize: 200,
+        },
+      }),
+    }),
+  ],
+  controllers: [ClientHubController],
+  providers: [
+    ClientHubService,
+    RequirementsService,
+    AccessService,
+    FilesService,
+    PrivateStorageService,
+  ],
+  exports: [ClientHubService, RequirementsService, FilesService],
 })
 export class ClientHubModule {}
