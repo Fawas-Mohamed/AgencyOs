@@ -31,7 +31,12 @@ for (const relative of ['.env', 'backend/.env']) {
     if (i < 1 || line.startsWith('#')) continue;
     const key = line.slice(0, i);
     const value = line.slice(i + 1);
-    if (['JWT_SECRET', 'DEMO_PASSWORD', 'LOCAL_DB_PASSWORD'].includes(key) && value.length >= 16)
+    if (
+      ['JWT_SECRET', 'DEMO_PASSWORD', 'DEMO_SECONDARY_PASSWORD', 'LOCAL_DB_PASSWORD'].includes(
+        key,
+      ) &&
+      value.length >= 16
+    )
       secrets.push(value);
     if (key === 'DATABASE_URL') {
       try {

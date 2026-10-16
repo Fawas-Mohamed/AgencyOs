@@ -5,61 +5,35 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { ClientHubService } from '../src/client-hub/client-hub.service';
 import { RequirementsService } from '../src/client-hub/requirements.service';
 import { FilesService } from '../src/client-hub/files.service';
-import { Actor, PERMISSIONS } from '../src/common/auth';
-import { hashPassword } from '../src/common/password';
+import { seedDemoActor } from './demo-actor';
 import { RequirementContentDto } from '../src/client-hub/dto/hub.dto';
 async function seed() {
   if (process.env.NODE_ENV === 'production' || process.env.DEMO_AUTH_ENABLED !== 'true')
     throw new Error('Local demonstration seed must be explicitly enabled');
   const email = process.env.DEMO_EMAIL?.toLowerCase();
   const password = process.env.DEMO_PASSWORD;
+  const secondaryEmail = process.env.DEMO_SECONDARY_EMAIL?.toLowerCase();
+  const secondaryPassword = process.env.DEMO_SECONDARY_PASSWORD;
+  if (
+    !secondaryEmail ||
+    !secondaryPassword ||
+    secondaryPassword.length < 12 ||
+    secondaryEmail === email
+  )
+    throw new Error(
+      'Configure distinct DEMO_SECONDARY_EMAIL and DEMO_SECONDARY_PASSWORD for isolation sample data',
+    );
   if (!email || !password || password.length < 12)
     throw new Error('Configure DEMO_EMAIL and a random DEMO_PASSWORD of at least 12 characters');
   const app = await NestFactory.createApplicationContext(AppModule, { logger: false });
   try {
     const prisma = app.get(PrismaService);
-    let user = await prisma.user.findUnique({
-      where: { email },
-      include: { agency: true, role: true },
+    const actor = await seedDemoActor(prisma, {
+      email,
+      password,
+      agencyName: 'Agency OS local demonstration',
+      displayName: 'Demo reviewer',
     });
-    if (user && user.agency.name !== 'Agency OS local demonstration')
-      throw new Error('Existing account is outside the demo adapter; it has been preserved');
-    if (!user) {
-      for (const key of PERMISSIONS)
-        await prisma.permission.upsert({
-          where: { key },
-          update: {},
-          create: { key, description: key },
-        });
-      const agency = await prisma.agency.create({
-        data: { name: 'Agency OS local demonstration' },
-      });
-      const role = await prisma.role.create({
-        data: {
-          agencyId: agency.id,
-          name: 'Agency administrator',
-          permissions: { create: PERMISSIONS.map((permissionKey) => ({ permissionKey })) },
-        },
-      });
-      user = await prisma.user.create({
-        data: {
-          agencyId: agency.id,
-          roleId: role.id,
-          email,
-          displayName: 'Demo reviewer',
-          passwordHash: hashPassword(password),
-        },
-        include: { agency: true, role: true },
-      });
-    }
-    const actor: Actor = {
-      userId: user.id,
-      agencyId: user.agencyId,
-      email: user.email,
-      displayName: user.displayName,
-      role: user.role.name,
-      permissions: [...PERMISSIONS],
-    };
     const hub = app.get(ClientHubService);
     const requirements = app.get(RequirementsService);
     const client =
@@ -189,8 +163,93 @@ async function seed() {
         occurredAt: new Date().toISOString(),
         requirementId: first.id,
       });
+    const secondary = await seedDemoActor(prisma, {
+      email: secondaryEmail,
+      password: secondaryPassword,
+      agencyName: 'Agency OS isolation demonstration',
+      displayName: 'Isolation reviewer',
+    });
+    const isolatedClient =
+      (await prisma.client.findFirst({
+        where: { agencyId: secondary.agencyId, company: 'Harbor Research Studio' },
+      })) ??
+      (await hub.createClient(secondary, {
+        name: 'Harbor Research Studio',
+        company: 'Harbor Research Studio',
+        contactName: 'Nila Fernando',
+        email: 'nila@example.com',
+      }));
+    let isolatedRequirement = await prisma.clientRequirement.findFirst({
+      where: {
+        agencyId: secondary.agencyId,
+        clientId: isolatedClient.id,
+        title: 'Research intake brief',
+      },
+    });
+    if (!isolatedRequirement)
+      isolatedRequirement = await requirements.create(
+        secondary,
+        isolatedClient.id,
+        Object.assign(new RequirementContentDto(), {
+          title: 'Research intake brief',
+          objective: 'Collect and review research requirements within this agency only.',
+          items: [
+            {
+              title: 'Structured intake',
+              description: 'Capture the approved research brief.',
+              category: 'Feature',
+              priority: 'HIGH',
+              notes: '',
+            },
+          ],
+        }),
+      );
+    if (
+      !(await prisma.clientCommunication.findFirst({
+        where: {
+          agencyId: secondary.agencyId,
+          clientId: isolatedClient.id,
+          subject: 'Research discovery call',
+        },
+      }))
+    )
+      await hub.createCommunication(secondary, isolatedClient.id, {
+        type: 'CALL',
+        subject: 'Research discovery call',
+        summary: 'Agreed to prepare a structured research brief.',
+        participants: ['Nila Fernando', 'Isolation reviewer'],
+        occurredAt: new Date().toISOString(),
+        requirementId: isolatedRequirement.id,
+      });
+    if (
+      !(await prisma.clientNote.findFirst({
+        where: {
+          agencyId: secondary.agencyId,
+          clientId: isolatedClient.id,
+          body: 'Internal: validate the research review contact.',
+        },
+      }))
+    )
+      await hub.createNote(secondary, isolatedClient.id, {
+        body: 'Internal: validate the research review contact.',
+        requirementId: isolatedRequirement.id,
+      });
+    if (
+      !(await prisma.clientFile.findFirst({
+        where: {
+          agencyId: secondary.agencyId,
+          clientId: isolatedClient.id,
+          originalName: 'Research reference',
+        },
+      }))
+    )
+      await app.get(FilesService).createLink(secondary, isolatedClient.id, {
+        originalName: 'Research reference',
+        referenceUrl: 'https://example.com/research',
+        // Client-level reference remains independently readable if a requirement is later confirmed.
+      });
     console.log(
-      'Seeded demonstration clients, draft and confirmed requirements, notes, communication and timeline. Existing data was not reset.',
+      'Seeded two isolated demonstration agencies with clients, requirements, notes, communications, references and activity. Existing records were not reset.',
     );
   } finally {
     await app.close();
