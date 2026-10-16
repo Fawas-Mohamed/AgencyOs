@@ -5,6 +5,8 @@ import { JwtService } from '@nestjs/jwt';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { Client } from '@prisma/client';
+import { Actor } from '../src/common/auth';
 
 async function verify() {
   if (process.env.NODE_ENV === 'production' || process.env.DEMO_AUTH_ENABLED !== 'true')
@@ -21,11 +23,16 @@ async function verify() {
       { email: process.env.DEMO_EMAIL!, password: process.env.DEMO_PASSWORD! },
       { email: process.env.DEMO_SECONDARY_EMAIL!, password: process.env.DEMO_SECONDARY_PASSWORD! },
     ];
-    const sign = (claims: object) => app.get(JwtService).sign(claims, {
-      secret: process.env.JWT_SECRET!, issuer: process.env.JWT_ISSUER!, audience: process.env.JWT_AUDIENCE!,
-      algorithm: 'HS256', expiresIn: '1m',
-    });
-    const sessions = [];
+    const sign = (claims: object) =>
+      app.get(JwtService).sign(claims, {
+        secret: process.env.JWT_SECRET!,
+        issuer: process.env.JWT_ISSUER!,
+        audience: process.env.JWT_AUDIENCE!,
+        algorithm: 'HS256',
+        expiresIn: '1m',
+      });
+    const sessions: { actor: Actor; list: Client[]; get: (route: string) => Promise<Response> }[] =
+      [];
     for (const identity of identities) {
       const login = await fetch(base + '/auth/login', {
         method: 'POST',
@@ -42,10 +49,10 @@ async function verify() {
         fetch(base + route, { headers: { Authorization: 'Bearer ' + token } });
       const me = await get('/auth/me');
       assert.equal(me.status, 200);
-      const actor = (await me.json()).data;
+      const actor: Actor = (await me.json()).data;
       const clients = await get('/clients');
       assert.equal(clients.status, 200);
-      const list = (await clients.json()).data.items;
+      const list: Client[] = (await clients.json()).data.items;
       assert.ok(list.length > 0);
       assert.ok(list.every((client: { agencyId: string }) => client.agencyId === actor.agencyId));
       sessions.push({ actor, list, get });
@@ -94,9 +101,7 @@ async function verify() {
     const injected = await fetch(base + '/clients', {
       method: 'POST',
       headers: {
-        Authorization:
-          'Bearer ' +
-          sign({ sub: sessions[0].actor.userId }),
+        Authorization: 'Bearer ' + sign({ sub: sessions[0].actor.userId }),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -107,13 +112,11 @@ async function verify() {
       }),
     });
     assert.equal(injected.status, 400);
-    const claimsToken = sign(
-      {
-        sub: sessions[0].actor.userId,
-        agencyId: sessions[1].actor.agencyId,
-        permissions: [],
-      },
-    );
+    const claimsToken = sign({
+      sub: sessions[0].actor.userId,
+      agencyId: sessions[1].actor.agencyId,
+      permissions: [],
+    });
     const claimed = await fetch(base + '/auth/me', {
       headers: { Authorization: 'Bearer ' + claimsToken },
     });

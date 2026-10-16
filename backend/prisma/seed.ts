@@ -210,12 +210,14 @@ async function seed() {
           agencyId: secondary.agencyId,
           clientId: isolatedClient.id,
           subject: 'Research discovery call',
+          followUp: 'Prepare the first research brief for review.',
         },
       }))
     )
       await hub.createCommunication(secondary, isolatedClient.id, {
         type: 'CALL',
         subject: 'Research discovery call',
+        followUp: 'Prepare the first research brief for review.',
         summary: 'Agreed to prepare a structured research brief.',
         participants: ['Nila Fernando', 'Isolation reviewer'],
         occurredAt: new Date().toISOString(),
