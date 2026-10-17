@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
@@ -11,6 +11,7 @@ import { configureApp } from '../src/bootstrap';
 
 import { hashPassword } from '../src/common/password';
 import { AccessService } from '../src/client-hub/access.service';
+import { PrivateStorageService } from '../src/client-hub/private-storage.service';
 describe('client hub HTTP + PostgreSQL integration', () => {
   let app: INestApplication;
   let db: PrismaService;
@@ -1399,6 +1400,602 @@ describe('client hub HTTP + PostgreSQL integration', () => {
         snapshot,
       );
       expect((await get('/requirements/' + r.id)).body.data.status).toBe('CONFIRMED');
+    });
+  });
+
+  describe('Day 3 communications, notes and bounded hub', () => {
+    it.each(['CALL', 'EMAIL', 'MEETING', 'WHATSAPP_MESSAGE', 'VIDEO_MEETING', 'OTHER'])(
+      'manually records %s with occurrence, participants, follow-up and trusted creator',
+      async (type) => {
+        const r = await create();
+        const response = await post('/clients/' + clientA + '/communications', {
+          type,
+          subject: 'Manual ' + type,
+          summary: 'Client scope discussion',
+          occurredAt: '2024-06-01T10:30:00+05:30',
+          participants: ['Client contact', 'Reviewer'],
+          followUp: 'Clarify the scope',
+          requirementId: r.id,
+        });
+        expect(response.status).toBe(201);
+        expect(response.body.data).toMatchObject({
+          type,
+          subject: 'Manual ' + type,
+          participants: ['Client contact', 'Reviewer'],
+          followUp: 'Clarify the scope',
+          createdById: userA,
+          requirementId: r.id,
+          occurredAt: '2024-06-01T05:00:00.000Z',
+        });
+        expect(response.body.data.createdAt).not.toBe(response.body.data.occurredAt);
+        const filtered = await get(
+          '/clients/' + clientA + '/communications?type=' + type + '&requirementId=' + r.id,
+        );
+        expect(filtered.body.data.total).toBe(1);
+      },
+    );
+    it('uses inclusive UTC date-only bounds, exact timestamp bounds and paginated type filters', async () => {
+      const r = await create();
+      for (const [type, occurredAt] of [
+        ['CALL', '2024-05-01T00:00:00.000Z'],
+        ['CALL', '2024-05-01T23:59:59.999Z'],
+        ['EMAIL', '2024-05-02T00:00:00.000Z'],
+      ])
+        await post('/clients/' + clientA + '/communications', {
+          type,
+          subject: 'Date range ' + r.id,
+          summary: 'Manual discussion',
+          occurredAt,
+          requirementId: r.id,
+        });
+      const base = '/clients/' + clientA + '/communications?requirementId=' + r.id;
+      const first = (
+        await get(base + '&type=CALL&from=2024-05-01&to=2024-05-01&limit=1&page=1&sort=oldest')
+      ).body.data;
+      const second = (
+        await get(base + '&type=CALL&from=2024-05-01&to=2024-05-01&limit=1&page=2&sort=oldest')
+      ).body.data;
+      expect(first).toMatchObject({ total: 2, totalPages: 2, limit: 1 });
+      expect(first.items[0].id).not.toBe(second.items[0].id);
+      expect(second.items[0].occurredAt).toBe('2024-05-01T23:59:59.999Z');
+      expect((await get(base + '&to=2024-05-01T00:00:00.000Z')).body.data.total).toBe(1);
+      expect((await get(base + '&from=2024-05-02&to=2024-05-01')).body.code).toBe(
+        'INVALID_DATE_RANGE',
+      );
+    });
+    it.each(['2024-06-01', '2024-06-01T10:30:00', '2024-02-30T10:00:00Z', 'yesterday'])(
+      'rejects ambiguous or invalid communication occurrence %s',
+      async (occurredAt) => {
+        expect(
+          (
+            await post('/clients/' + clientA + '/communications', {
+              type: 'CALL',
+              subject: 'Invalid occurrence',
+              summary: 'Invalid',
+              occurredAt,
+            })
+          ).status,
+        ).toBe(400);
+      },
+    );
+    it('keeps internal notes distinct and filters requirement discussion without leaking wrong-client links', async () => {
+      const r = await create();
+      const before = await db.clientCommunication.count({ where: { clientId: clientA } });
+      const note = await post('/clients/' + clientA + '/notes', {
+        body: 'Internal assumption to validate during review',
+        requirementId: r.id,
+      });
+      expect(note.status).toBe(201);
+      expect(note.body.data).toMatchObject({ createdById: userA, requirementId: r.id });
+      const notes = (
+        await get('/clients/' + clientA + '/notes?requirementId=' + r.id + '&q=assumption&limit=1')
+      ).body.data;
+      expect(notes.total).toBe(1);
+      expect(notes.items[0].body).toContain('Internal assumption');
+      expect(await db.clientCommunication.count({ where: { clientId: clientA } })).toBe(before);
+      for (const resource of ['notes', 'communications', 'files']) {
+        expect(
+          (await get('/clients/' + clientA2 + '/' + resource + '?requirementId=' + r.id)).status,
+        ).toBe(404);
+        expect(
+          (await get('/clients/' + clientA + '/' + resource + '?requirementId=' + reqB)).status,
+        ).toBe(404);
+      }
+      expect(
+        (
+          await post('/clients/' + clientA + '/notes', {
+            body: 'Spoofed',
+            createdById: userWriter,
+          })
+        ).status,
+      ).toBe(400);
+    });
+    it('returns bounded summaries and exact permission-gated counts without fabricated related records', async () => {
+      const client = (
+        await post('/clients', {
+          name: 'Bounded hub ' + suffix,
+          company: 'Bounded',
+          contactName: 'Contact',
+        })
+      ).body.data;
+      const fileIds: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        expect(
+          (
+            await post('/clients/' + client.id + '/requirements', {
+              ...content,
+              title: 'Brief ' + i,
+            })
+          ).status,
+        ).toBe(201);
+        expect(
+          (
+            await post('/clients/' + client.id + '/communications', {
+              type: 'MEETING',
+              subject: 'Discussion ' + i,
+              summary: 'Scope',
+              occurredAt: '2024-07-01T12:00:00Z',
+            })
+          ).status,
+        ).toBe(201);
+        expect(
+          (await post('/clients/' + client.id + '/notes', { body: 'Internal note ' + i })).status,
+        ).toBe(201);
+        const reference = await post('/clients/' + client.id + '/files', {
+          originalName: 'Reference ' + i,
+          referenceUrl: 'https://example.com/' + i,
+        });
+        expect(reference.status).toBe(201);
+        fileIds.push(reference.body.data.id);
+      }
+      expect(
+        (
+          await request(app.getHttpServer())
+            .delete('/api/files/' + fileIds[0])
+            .set('Authorization', 'Bearer ' + tokenA)
+        ).status,
+      ).toBe(200);
+      const response = await get('/clients/' + client.id + '/hub');
+      expect(response.status).toBe(200);
+      const hub = response.body.data;
+      expect(hub.summaryLimit).toBe(10);
+      expect(hub.counts).toMatchObject({
+        requirements: 12,
+        communications: 12,
+        notes: 12,
+        files: 11,
+      });
+      expect(hub.counts.timeline).toBe(await db.auditLog.count({ where: { clientId: client.id } }));
+      for (const section of ['requirements', 'communications', 'notes', 'files', 'timeline'])
+        expect(hub[section]).toHaveLength(10);
+      expect(
+        hub.relatedRecords.every(
+          (provider: { available: boolean }) => provider.available === false,
+        ),
+      ).toBe(true);
+      const restricted = (await get('/clients/' + client.id + '/hub', tokenViewer)).body.data;
+      for (const section of ['requirements', 'communications', 'notes', 'files', 'timeline']) {
+        expect(restricted[section]).toBeNull();
+        expect(restricted.counts[section]).toBeNull();
+      }
+    });
+    it('records each business event and paginates equal timestamps deterministically', async () => {
+      const client = (
+        await post('/clients', {
+          name: 'Activity ' + suffix,
+          company: 'Activity',
+          contactName: 'Contact',
+        })
+      ).body.data;
+      await patch('/clients/' + client.id, {
+        name: client.name,
+        company: 'Updated activity',
+        contactName: 'Contact',
+      });
+      let r = (await post('/clients/' + client.id + '/requirements', content)).body.data;
+      r = (
+        await patch('/requirements/' + r.id, {
+          ...content,
+          title: 'Clarified brief',
+          expectedVersion: r.lockVersion,
+        })
+      ).body.data;
+      await post('/clients/' + client.id + '/notes', {
+        body: 'Internal context',
+        requirementId: r.id,
+      });
+      await post('/clients/' + client.id + '/communications', {
+        type: 'CALL',
+        subject: 'Discussion',
+        summary: 'Scope',
+        occurredAt: '2020-01-01T00:00:00Z',
+        requirementId: r.id,
+      });
+      await post('/clients/' + client.id + '/files', {
+        originalName: 'Reference',
+        referenceUrl: 'https://example.com',
+        requirementId: r.id,
+      });
+      await request(app.getHttpServer())
+        .post('/api/clients/' + client.id + '/files/upload')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .field('requirementId', r.id)
+        .attach('file', Buffer.from('Private brief'), {
+          filename: 'brief.txt',
+          contentType: 'text/plain',
+        });
+      for (const status of ['UNDER_REVIEW', 'CHANGES_REQUESTED', 'UNDER_REVIEW', 'CONFIRMED']) {
+        const changed = await patch('/requirements/' + r.id + '/status', {
+          status,
+          expectedVersion: r.lockVersion,
+          ...(status === 'CHANGES_REQUESTED' ? { reason: 'Clarify scope' } : {}),
+        });
+        expect(changed.status).toBe(200);
+        r = changed.body.data;
+      }
+      const events = await db.auditLog.findMany({ where: { clientId: client.id } });
+      const types = events.map((event) => event.eventType);
+      for (const type of [
+        'CLIENT_CREATED',
+        'CLIENT_UPDATED',
+        'REQUIREMENT_CREATED',
+        'REQUIREMENT_UPDATED',
+        'REQUIREMENT_UNDER_REVIEW',
+        'REQUIREMENT_CHANGES_REQUESTED',
+        'REQUIREMENT_CONFIRMED',
+        'NOTE_ADDED',
+        'COMMUNICATION_ADDED',
+        'REFERENCE_ADDED',
+        'FILE_ADDED',
+      ])
+        expect(types).toContain(type);
+      expect(
+        events.every((event) => event.actorId === userA && event.createdAt instanceof Date),
+      ).toBe(true);
+      // Own fixture timestamps are tied deliberately to verify the UUID tie-break.
+      await db.auditLog.updateMany({
+        where: { clientId: client.id },
+        data: { createdAt: new Date('2024-01-01T00:00:00Z') },
+      });
+      const orderedIds = events.map((event) => event.id).sort();
+      const base = '/clients/' + client.id + '/timeline?sort=oldest&limit=3&page=';
+      const first = (await get(base + '1')).body.data;
+      const second = (await get(base + '2')).body.data;
+      expect([...first.items, ...second.items].map((event: { id: string }) => event.id)).toEqual(
+        orderedIds.slice(0, 6),
+      );
+      const newest = (await get('/clients/' + client.id + '/timeline?limit=3')).body.data;
+      expect(newest.items.map((event: { id: string }) => event.id)).toEqual(
+        orderedIds.reverse().slice(0, 3),
+      );
+      const hub = (await get('/clients/' + client.id + '/hub')).body.data;
+      expect(hub.timeline.slice(0, 3).map((event: { id: string }) => event.id)).toEqual(
+        newest.items.map((event: { id: string }) => event.id),
+      );
+    });
+  });
+
+  describe('Day 3 private files, atomic supporting writes and approved export', () => {
+    it('stores safe file metadata and headers and denies unauthorized private bytes', async () => {
+      const r = await create();
+      const upload = await request(app.getHttpServer())
+        .post('/api/clients/' + clientA + '/files/upload')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .field('requirementId', r.id)
+        .attach('file', Buffer.from('Client brief'), {
+          filename: "O'Reilly (brief).txt",
+          contentType: 'text/plain',
+        });
+      expect(upload.status).toBe(201);
+      const file = upload.body.data;
+      expect(file).toMatchObject({
+        originalName: "O'Reilly (brief).txt",
+        mimeType: 'text/plain',
+        size: 12,
+        clientId: clientA,
+        requirementId: r.id,
+        uploadedBy: { id: userA },
+      });
+      expect(file.createdAt).toBeTruthy();
+      expect(file.storageKey).toBeUndefined();
+      const download = await get('/files/' + file.id + '/download');
+      expect(download.status).toBe(200);
+      expect(download.text).toBe('Client brief');
+      expect(download.headers['content-disposition']).toContain(
+        "filename*=UTF-8''O%27Reilly%20%28brief%29.txt",
+      );
+      expect(download.headers['cache-control']).toContain('no-store');
+      expect(download.headers['x-content-type-options']).toBe('nosniff');
+      expect(
+        (await request(app.getHttpServer()).get('/api/files/' + file.id + '/download')).status,
+      ).toBe(401);
+      expect((await get('/files/' + file.id + '/download', tokenViewer)).status).toBe(403);
+      expect((await get('/files/' + file.id + '/download', tokenB)).status).toBe(404);
+    });
+    it('stores reference URLs without fetching them and distinguishes references from downloads', async () => {
+      const r = await create();
+      const fetch = jest
+        .spyOn(global, 'fetch')
+        .mockRejectedValue(new Error('No outbound fetch allowed'));
+      try {
+        const reference = await post('/clients/' + clientA + '/files', {
+          originalName: 'Client research reference',
+          referenceUrl: 'https://example.com/private-reference',
+          requirementId: r.id,
+        });
+        expect(reference.status).toBe(201);
+        expect(reference.body.data).toMatchObject({
+          referenceUrl: 'https://example.com/private-reference',
+          mimeType: null,
+          size: null,
+          uploadedBy: { id: userA },
+          requirementId: r.id,
+        });
+        expect(fetch).not.toHaveBeenCalled();
+        const download = await get('/files/' + reference.body.data.id + '/download');
+        expect(download.status).toBe(409);
+        expect(download.body.code).toBe('REFERENCE_ONLY');
+      } finally {
+        fetch.mockRestore();
+      }
+    });
+    it.each([
+      ['application/pdf', Buffer.from('Spoofed PDF'), 'INVALID_FILE_CONTENT'],
+      ['image/png', Buffer.from('Spoofed PNG'), 'INVALID_FILE_CONTENT'],
+      ['image/svg+xml', Buffer.from('<svg/>'), 'INVALID_FILE_TYPE'],
+      ['text/plain', Buffer.from([255, 254]), 'INVALID_FILE_CONTENT'],
+      ['text/plain', Buffer.alloc(0), 'INVALID_FILE_SIZE'],
+    ])('rejects upload %s %s without object or metadata leakage', async (mimeType, bytes, code) => {
+      const before = existsSync(storageRoot) ? readdirSync(storageRoot).sort() : [];
+      const count = await db.clientFile.count({ where: { agencyId: ids[0] } });
+      const response = await request(app.getHttpServer())
+        .post('/api/clients/' + clientA + '/files/upload')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .attach('file', bytes, { filename: 'rejected.bin', contentType: mimeType });
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe(code);
+      expect(await db.clientFile.count({ where: { agencyId: ids[0] } })).toBe(count);
+      expect(existsSync(storageRoot) ? readdirSync(storageRoot).sort() : []).toEqual(before);
+    });
+    it('rejects unknown upload identity fields and missing file parts', async () => {
+      const before = existsSync(storageRoot) ? readdirSync(storageRoot).sort() : [];
+      const spoofed = await request(app.getHttpServer())
+        .post('/api/clients/' + clientA + '/files/upload')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .field('agencyId', ids[1])
+        .attach('file', Buffer.from('Brief'), { filename: 'brief.txt', contentType: 'text/plain' });
+      expect(spoofed.status).toBe(400);
+      expect((await post('/clients/' + clientA + '/files/upload', {})).body.code).toBe(
+        'FILE_REQUIRED',
+      );
+      expect(existsSync(storageRoot) ? readdirSync(storageRoot).sort() : []).toEqual(before);
+    });
+    it.each([
+      'clientCreate',
+      'clientUpdate',
+      'note',
+      'communication',
+      'reference',
+      'upload',
+    ] as const)(
+      'rolls back %s and its event when audit persistence fails, including uploaded bytes',
+      async (operation) => {
+        const counts = async () => ({
+          clients: await db.client.count({ where: { agencyId: ids[0] } }),
+          notes: await db.clientNote.count({ where: { agencyId: ids[0] } }),
+          communications: await db.clientCommunication.count({ where: { agencyId: ids[0] } }),
+          files: await db.clientFile.count({ where: { agencyId: ids[0] } }),
+          events: await db.auditLog.count({ where: { agencyId: ids[0] } }),
+        });
+        const before = await counts();
+        const client = await db.client.findUniqueOrThrow({ where: { id: clientA } });
+        const objects = existsSync(storageRoot) ? readdirSync(storageRoot).sort() : [];
+        const audit = jest
+          .spyOn(app.get(AccessService), 'audit')
+          .mockRejectedValueOnce(new Error('Private audit failure'));
+        try {
+          const calls = {
+            clientCreate: () =>
+              post('/clients', { name: 'Rollback', company: 'Rollback', contactName: 'Contact' }),
+            clientUpdate: () =>
+              patch('/clients/' + clientA, {
+                name: 'Rollback',
+                company: 'Rollback',
+                contactName: 'Contact',
+              }),
+            note: () => post('/clients/' + clientA + '/notes', { body: 'Must roll back' }),
+            communication: () =>
+              post('/clients/' + clientA + '/communications', {
+                type: 'OTHER',
+                subject: 'Must roll back',
+                summary: 'Must roll back',
+                occurredAt: '2024-01-01T12:00:00Z',
+              }),
+            reference: () =>
+              post('/clients/' + clientA + '/files', {
+                originalName: 'Rollback',
+                referenceUrl: 'https://example.com',
+              }),
+            upload: () =>
+              request(app.getHttpServer())
+                .post('/api/clients/' + clientA + '/files/upload')
+                .set('Authorization', 'Bearer ' + tokenA)
+                .attach('file', Buffer.from('Rollback brief'), {
+                  filename: 'brief.txt',
+                  contentType: 'text/plain',
+                }),
+          };
+          const response = await calls[operation]();
+          expect(response.status).toBe(500);
+          expect(response.body).toMatchObject({
+            success: false,
+            code: 'INTERNAL_ERROR',
+            details: {},
+          });
+          expect(JSON.stringify(response.body)).not.toMatch(/Private audit|storageKey|stack/);
+        } finally {
+          audit.mockRestore();
+        }
+        expect(await counts()).toEqual(before);
+        expect(await db.client.findUniqueOrThrow({ where: { id: clientA } })).toEqual(client);
+        expect(existsSync(storageRoot) ? readdirSync(storageRoot).sort() : []).toEqual(objects);
+      },
+    );
+    it('never exports a requirement that has no confirmed version in any working state', async () => {
+      let r = await create();
+      for (const status of [null, 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'ARCHIVED']) {
+        if (status)
+          r = (
+            await patch('/requirements/' + r.id + '/status', {
+              status,
+              expectedVersion: r.lockVersion,
+              ...(['CHANGES_REQUESTED', 'ARCHIVED'].includes(status)
+                ? { reason: 'Review decision' }
+                : {}),
+            })
+          ).body.data;
+        const current = await get('/requirements/' + r.id + '/export');
+        expect(current.status).toBe(409);
+        expect(current.body.code).toBe('NOT_CONFIRMED');
+        expect(current.body.data).toBeUndefined();
+        expect((await get('/requirements/' + r.id + '/export?version=1')).status).toBe(404);
+      }
+      expect(await db.requirementRevision.count({ where: { requirementId: r.id } })).toBe(0);
+      expect((await get('/requirements/' + r.id + '/export?version=2147483648')).status).toBe(400);
+    });
+    it('retains the exact approved package and private bytes through revision and archival', async () => {
+      const client = (
+        await post('/clients', {
+          name: 'Retained history ' + suffix,
+          company: 'History',
+          contactName: 'Contact',
+        })
+      ).body.data;
+      let r = (
+        await post('/clients/' + client.id + '/requirements', {
+          ...content,
+          clientNotes: 'Client approved this brief',
+          assumptions: 'Internal identity assumption',
+          timeline: 'Client expectation: six weeks',
+        })
+      ).body.data;
+      const upload = await request(app.getHttpServer())
+        .post('/api/clients/' + client.id + '/files/upload')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .field('requirementId', r.id)
+        .attach('file', Buffer.from('Approved attachment'), {
+          filename: 'approved.txt',
+          contentType: 'text/plain',
+        });
+      expect(upload.status).toBe(201);
+      const fileId = upload.body.data.id;
+      await post('/clients/' + client.id + '/files', {
+        originalName: 'Approved reference',
+        referenceUrl: 'https://example.com/approved',
+        requirementId: r.id,
+      });
+      for (const status of ['UNDER_REVIEW', 'CONFIRMED'])
+        r = (
+          await patch('/requirements/' + r.id + '/status', {
+            status,
+            expectedVersion: r.lockVersion,
+          })
+        ).body.data;
+      const approved = (await get('/requirements/' + r.id + '/export')).body.data;
+      expect(approved).toMatchObject({
+        schemaVersion: 1,
+        requirementId: r.id,
+        clientId: client.id,
+        version: 1,
+        title: content.title,
+        objective: content.objective,
+        services: content.services,
+        clientProvided: {
+          budgetMin: '100.1',
+          budgetMax: '900.25',
+          currency: 'LKR',
+          notes: 'Client approved this brief',
+          timeline: 'Client expectation: six weeks',
+        },
+        internal: { assumptions: 'Internal identity assumption' },
+        confirmedBy: { id: userA },
+      });
+      expect(approved.references).toHaveLength(2);
+      expect(approved.items.map((item: { position: number }) => item.position)).toEqual([0, 1]);
+      expect(JSON.stringify(approved)).not.toMatch(/storageKey|passwordHash|\.data/);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .delete('/api/files/' + fileId)
+            .set('Authorization', 'Bearer ' + tokenA)
+        ).status,
+      ).toBe(409);
+      r = (
+        await patch('/requirements/' + r.id + '/status', {
+          status: 'DRAFT',
+          expectedVersion: r.lockVersion,
+          reason: 'New working revision',
+        })
+      ).body.data;
+      expect(
+        (
+          await request(app.getHttpServer())
+            .delete('/api/files/' + fileId)
+            .set('Authorization', 'Bearer ' + tokenA)
+        ).status,
+      ).toBe(200);
+      await post('/clients/' + client.id + '/files', {
+        originalName: 'Unapproved new reference',
+        referenceUrl: 'https://example.com/new',
+        requirementId: r.id,
+      });
+      expect((await get('/requirements/' + r.id + '/export')).body.code).toBe('NOT_CONFIRMED');
+      expect((await get('/requirements/' + r.id + '/export?version=1')).body.data).toEqual(
+        approved,
+      );
+      expect((await get('/files/' + fileId + '/download')).text).toBe('Approved attachment');
+      const role = await db.user.findUniqueOrThrow({ where: { id: userWriter } });
+      await db.rolePermission.delete({
+        where: { roleId_permissionKey: { roleId: role.roleId, permissionKey: 'file.read' } },
+      });
+      try {
+        expect((await get('/requirements/' + r.id + '/export?version=1', tokenWriter)).status).toBe(
+          403,
+        );
+        expect((await get('/files/' + fileId + '/download', tokenWriter)).status).toBe(403);
+      } finally {
+        await db.rolePermission.create({
+          data: { roleId: role.roleId, permissionKey: 'file.read' },
+        });
+      }
+      r = (
+        await patch('/requirements/' + r.id + '/status', {
+          status: 'ARCHIVED',
+          expectedVersion: r.lockVersion,
+          reason: 'Retain history',
+        })
+      ).body.data;
+      await patch('/clients/' + client.id, {
+        name: client.name,
+        company: client.company,
+        contactName: client.contactName,
+        status: 'ARCHIVED',
+      });
+      expect((await get('/requirements/' + r.id + '/export?version=1')).body.data).toEqual(
+        approved,
+      );
+      expect((await get('/files/' + fileId + '/download')).status).toBe(200);
+      expect((await get('/requirements/' + r.id + '/export?version=1', tokenB)).status).toBe(404);
+      const reconciliation = await app
+        .get(PrivateStorageService)
+        .reconcile(
+          async (storageKey) => Boolean(await db.clientFile.findUnique({ where: { storageKey } })),
+          false,
+          new Date(Date.now() + 48 * 60 * 60 * 1000),
+        );
+      expect(reconciliation.eligible).toBe(0);
+      expect(reconciliation.deleted).toBe(0);
+      expect(reconciliation.retained).toBeGreaterThan(0);
     });
   });
 });

@@ -8,6 +8,7 @@ import { RequirementsService } from './requirements.service';
 import { AccessService } from './access.service';
 import { FilesService } from './files.service';
 import { PrivateStorageService } from './private-storage.service';
+import { PrivateStorage } from './private-storage';
 @Module({
   imports: [
     MulterModule.registerAsync({
@@ -31,6 +32,7 @@ import { PrivateStorageService } from './private-storage.service';
     AccessService,
     FilesService,
     PrivateStorageService,
+    { provide: PrivateStorage, useExisting: PrivateStorageService },
   ],
   exports: [ClientHubService, RequirementsService, FilesService],
 })

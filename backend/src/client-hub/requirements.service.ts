@@ -330,7 +330,7 @@ export class RequirementsService {
             archivedAt: null,
           },
           select: fileSelect,
-          orderBy: { createdAt: 'asc' },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         });
         const snapshot = JSON.parse(
           JSON.stringify({

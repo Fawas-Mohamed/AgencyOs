@@ -30,6 +30,7 @@ import {
   FileQuery,
   FileUploadDto,
   PageQuery,
+  NoteQuery,
   RequirementContentDto,
   RequirementQuery,
   UpdateClientDto,
@@ -139,7 +140,7 @@ export class ClientHubController {
   notes(
     @CurrentActor() actor: Actor,
     @Param('id', ParseUUIDPipe) id: string,
-    @Query() query: PageQuery,
+    @Query() query: NoteQuery,
   ) {
     return this.hub.notes(actor, id, query);
   }

@@ -128,6 +128,8 @@ export interface Activity {
   metadata: Record<string, unknown> | null;
 }
 export interface Hub {
+  summaryLimit: number;
+  counts: Record<'requirements' | 'communications' | 'notes' | 'files' | 'timeline', number | null>;
   client: Client;
   requirements: Requirement[] | null;
   communications: Communication[] | null;

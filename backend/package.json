@@ -13,6 +13,7 @@
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "ts-node prisma/seed.ts",
+    "storage:reconcile": "ts-node prisma/reconcile-storage.ts",
     "test": "jest --runInBand",
     "test:integration": "jest --config test/jest-integration.json --runInBand",
     "lint": "eslint ."
