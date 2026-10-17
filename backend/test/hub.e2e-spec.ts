@@ -10,6 +10,7 @@ import { PERMISSIONS } from '../src/common/auth';
 import { configureApp } from '../src/bootstrap';
 
 import { hashPassword } from '../src/common/password';
+import { AccessService } from '../src/client-hub/access.service';
 describe('client hub HTTP + PostgreSQL integration', () => {
   let app: INestApplication;
   let db: PrismaService;
@@ -813,5 +814,591 @@ describe('client hub HTTP + PostgreSQL integration', () => {
     );
     const dates = timeline.map((event: { createdAt: string }) => event.createdAt);
     expect(dates).toEqual([...dates].sort());
+  });
+
+  describe('Day 2 requirement contract', () => {
+    it('paginates, searches objectives case-insensitively and filters status within one client', async () => {
+      const marker = 'filter-' + randomUUID();
+      let reviewed = (
+        await post('/clients/' + clientA + '/requirements', {
+          ...content,
+          title: marker + ' approved',
+        })
+      ).body.data;
+      reviewed = (
+        await patch('/requirements/' + reviewed.id + '/status', {
+          status: 'UNDER_REVIEW',
+          expectedVersion: reviewed.lockVersion,
+        })
+      ).body.data;
+      await patch('/requirements/' + reviewed.id + '/status', {
+        status: 'CONFIRMED',
+        expectedVersion: reviewed.lockVersion,
+      });
+      await post('/clients/' + clientA + '/requirements', { ...content, title: marker + ' draft' });
+      await post('/clients/' + clientA + '/requirements', {
+        ...content,
+        title: 'Objective-only match',
+        objective: marker,
+      });
+      await post('/clients/' + clientA2 + '/requirements', {
+        ...content,
+        title: marker + ' other client',
+      });
+      await post(
+        '/clients/' + clientB + '/requirements',
+        { ...content, title: marker + ' foreign' },
+        tokenB,
+      );
+      const path =
+        '/clients/' +
+        clientA +
+        '/requirements?q=' +
+        marker.toUpperCase() +
+        '&status=DRAFT&limit=1&sort=oldest&page=';
+      const first = (await get(path + '1')).body.data;
+      const second = (await get(path + '2')).body.data;
+      expect(first).toMatchObject({ total: 2, page: 1, limit: 1, totalPages: 2 });
+      expect(second).toMatchObject({ total: 2, page: 2, totalPages: 2 });
+      expect(first.items).toHaveLength(1);
+      expect(second.items).toHaveLength(1);
+      expect(first.items[0].id).not.toBe(second.items[0].id);
+      for (const item of [...first.items, ...second.items]) {
+        expect(item.clientId).toBe(clientA);
+        expect(item.agencyId).toBe(ids[0]);
+        expect(item.status).toBe('DRAFT');
+      }
+      expect((await get(path + '3')).body.data.items).toEqual([]);
+      const approved = (
+        await get('/clients/' + clientA + '/requirements?q=' + marker + '&status=CONFIRMED')
+      ).body.data;
+      expect(approved.total).toBe(1);
+      expect(approved.items[0].id).toBe(reviewed.id);
+    });
+
+    it.each([
+      'status=APPROVED',
+      'page=0',
+      'page=-1',
+      'limit=0',
+      'limit=101',
+      'sort=title',
+      'unknown=true',
+    ])('rejects invalid requirement query %s', async (query) => {
+      const result = await get('/clients/' + clientA + '/requirements?' + query);
+      expect(result.status).toBe(400);
+      expect(result.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('supports optional expectations and preserves high-precision budgets with separate internal context', async () => {
+      const minimal = await post('/clients/' + clientA + '/requirements', {
+        title: 'Minimal brief',
+        objective: 'Capture scope',
+        items: [{ title: 'Intake form' }],
+      });
+      expect(minimal.status).toBe(201);
+      expect(minimal.body.data).toMatchObject({
+        budgetMin: null,
+        budgetMax: null,
+        currency: null,
+        targetDate: null,
+        timeline: '',
+        assumptions: '',
+        clientNotes: '',
+        confirmedById: null,
+        confirmedAt: null,
+      });
+      const precise = await post('/clients/' + clientA + '/requirements', {
+        ...content,
+        budgetMin: '9999999999999999.98',
+        budgetMax: '9999999999999999.99',
+        targetDate: '2028-02-29',
+        timeline: 'Client expectation: eight weeks, subject to review.',
+        clientNotes: 'Client fact: supplied content is approved.',
+        assumptions: 'Internal assumption: identity integration will be available.',
+        internalRecommendations: 'Validate identity integration during review.',
+      });
+      expect(precise.status).toBe(201);
+      const read = (await get('/requirements/' + precise.body.data.id)).body.data;
+      expect(read.budgetMin).toBe('9999999999999999.98');
+      expect(read.budgetMax).toBe('9999999999999999.99');
+      expect(read.targetDate).toBe('2028-02-29T00:00:00.000Z');
+      expect(read.clientNotes).toBe('Client fact: supplied content is approved.');
+      expect(read.assumptions).toBe('Internal assumption: identity integration will be available.');
+      expect(read.timeline).toContain('Client expectation');
+    });
+
+    it.each([
+      { targetDate: '2027-02-29' },
+      { targetDate: '2026-13-01' },
+      { targetDate: '2026-01-01T12:00:00Z' },
+      { budgetMin: '-1.00' },
+      { budgetMin: '1.001' },
+      { budgetMax: '10000000000000000.00' },
+      { currency: 'lkr' },
+      { referenceLinks: ['https://user:secret@example.com'] },
+      { items: [{ title: 'Invalid priority', priority: 'URGENT' }] },
+    ])('rejects invalid requirement data %j without writes', async (changes) => {
+      const count = await db.clientRequirement.count({ where: { agencyId: ids[0] } });
+      const result = await post('/clients/' + clientA + '/requirements', {
+        ...content,
+        ...changes,
+      });
+      expect(result.status).toBe(400);
+      expect(await db.clientRequirement.count({ where: { agencyId: ids[0] } })).toBe(count);
+      expect(JSON.stringify(result.body)).not.toMatch(/passwordHash|stack|Prisma/);
+    });
+
+    it.each(['preparedById', 'confirmedById', 'confirmedAt', 'createdAt', 'clientId', 'status'])(
+      'rejects browser-controlled %s on create and edit',
+      async (field) => {
+        const r = await create();
+        const spoof = field.endsWith('At')
+          ? '2020-01-01T00:00:00Z'
+          : field === 'status'
+            ? 'CONFIRMED'
+            : clientA2;
+        expect(
+          (await post('/clients/' + clientA + '/requirements', { ...content, [field]: spoof }))
+            .status,
+        ).toBe(400);
+        expect(
+          (
+            await patch('/requirements/' + r.id, {
+              ...content,
+              expectedVersion: r.lockVersion,
+              [field]: spoof,
+            })
+          ).status,
+        ).toBe(400);
+        const current = (await get('/requirements/' + r.id)).body.data;
+        expect(current.lockVersion).toBe(r.lockVersion);
+        expect(current.preparedById).toBe(userA);
+        expect(current.confirmedById).toBeNull();
+      },
+    );
+
+    it('rejects malformed, foreign, wrong-client and existing item IDs and browser positions', async () => {
+      const r = await create();
+      const other = (await post('/clients/' + clientA2 + '/requirements', content)).body.data;
+      const foreignItem = await db.requirementItem.findFirstOrThrow({
+        where: { requirementId: reqB },
+      });
+      const before = await db.requirementItem.findMany({
+        where: { requirementId: r.id },
+        orderBy: { position: 'asc' },
+      });
+      for (const itemId of [
+        'not-a-uuid',
+        randomUUID(),
+        foreignItem.id,
+        other.items[0].id,
+        r.items[0].id,
+      ]) {
+        const items = [{ ...content.items[0], id: itemId }];
+        expect(
+          (await post('/clients/' + clientA + '/requirements', { ...content, items })).status,
+        ).toBe(400);
+        expect(
+          (
+            await patch('/requirements/' + r.id, {
+              ...content,
+              items,
+              expectedVersion: r.lockVersion,
+            })
+          ).status,
+        ).toBe(400);
+      }
+      expect(
+        (
+          await patch('/requirements/' + r.id, {
+            ...content,
+            items: [{ ...content.items[0], position: 99 }],
+            expectedVersion: r.lockVersion,
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        await db.requirementItem.findMany({
+          where: { requirementId: r.id },
+          orderBy: { position: 'asc' },
+        }),
+      ).toEqual(before);
+    });
+
+    it.each([
+      { status: 'APPROVED', expectedVersion: 1 },
+      { status: null, expectedVersion: 1 },
+      { status: 'UNDER_REVIEW', expectedVersion: 0 },
+      { status: 'UNDER_REVIEW', expectedVersion: 1.5 },
+      { status: 'UNDER_REVIEW', expectedVersion: '1' },
+      { status: 'UNDER_REVIEW', expectedVersion: 2147483648 },
+      { status: 'UNDER_REVIEW' },
+    ])('rejects invalid status/version data %j', async (body) => {
+      const r = await create();
+      const result = await patch('/requirements/' + r.id + '/status', body);
+      expect(result.status).toBe(400);
+      expect(result.body.code).toBe('VALIDATION_ERROR');
+      expect((await get('/requirements/' + r.id)).body.data).toMatchObject({
+        status: 'DRAFT',
+        lockVersion: 1,
+        confirmedAt: null,
+        confirmedById: null,
+      });
+    });
+
+    it('requires reasons for archival and change requests without consuming a version', async () => {
+      let r = await create();
+      expect(
+        (
+          await patch('/requirements/' + r.id + '/status', {
+            status: 'ARCHIVED',
+            expectedVersion: r.lockVersion,
+            reason: '   ',
+          })
+        ).body.code,
+      ).toBe('REASON_REQUIRED');
+      r = (
+        await patch('/requirements/' + r.id + '/status', {
+          status: 'UNDER_REVIEW',
+          expectedVersion: r.lockVersion,
+        })
+      ).body.data;
+      const denied = await patch('/requirements/' + r.id + '/status', {
+        status: 'CHANGES_REQUESTED',
+        expectedVersion: r.lockVersion,
+        reason: '',
+      });
+      expect(denied.status).toBe(400);
+      expect(denied.body.code).toBe('REASON_REQUIRED');
+      expect((await get('/requirements/' + r.id)).body.data.lockVersion).toBe(r.lockVersion);
+    });
+
+    it('protects each requirement operation against anonymous and permission-denied calls', async () => {
+      const r = await create();
+      for (const token of [undefined, tokenViewer]) {
+        const expected = token ? 403 : 401;
+        const calls = [
+          () => request(app.getHttpServer()).get('/api/clients/' + clientA + '/requirements'),
+          () =>
+            request(app.getHttpServer())
+              .post('/api/clients/' + clientA + '/requirements')
+              .send(content),
+          () => request(app.getHttpServer()).get('/api/requirements/' + r.id),
+          () =>
+            request(app.getHttpServer())
+              .patch('/api/requirements/' + r.id)
+              .send({ ...content, expectedVersion: r.lockVersion }),
+          () =>
+            request(app.getHttpServer())
+              .patch('/api/requirements/' + r.id + '/status')
+              .send({ status: 'UNDER_REVIEW', expectedVersion: r.lockVersion }),
+        ];
+        for (const makeCall of calls) {
+          const call = makeCall();
+          if (token) call.set('Authorization', 'Bearer ' + token);
+          expect((await call).status).toBe(expected);
+        }
+      }
+      expect((await get('/requirements/' + r.id)).body.data.lockVersion).toBe(1);
+    });
+
+    it('isolates requirement reads and writes in both agency directions', async () => {
+      const r = await create();
+      for (const [foreignClient, foreignRequirement, token] of [
+        [clientB, reqB, tokenA],
+        [clientA, r.id, tokenB],
+      ]) {
+        const before = await db.clientRequirement.findUniqueOrThrow({
+          where: { id: foreignRequirement },
+        });
+        expect((await get('/clients/' + foreignClient + '/requirements', token)).status).toBe(404);
+        expect((await get('/requirements/' + foreignRequirement, token)).status).toBe(404);
+        expect(
+          (await post('/clients/' + foreignClient + '/requirements', content, token)).status,
+        ).toBe(404);
+        expect(
+          (
+            await patch(
+              '/requirements/' + foreignRequirement,
+              { ...content, expectedVersion: 1 },
+              token,
+            )
+          ).status,
+        ).toBe(404);
+        expect(
+          (
+            await patch(
+              '/requirements/' + foreignRequirement + '/status',
+              {
+                status: 'UNDER_REVIEW',
+                expectedVersion: 1,
+              },
+              token,
+            )
+          ).status,
+        ).toBe(404);
+        expect(
+          await db.clientRequirement.findUniqueOrThrow({ where: { id: foreignRequirement } }),
+        ).toEqual(before);
+      }
+    });
+  });
+
+  describe('Day 2 transactional review and history', () => {
+    it('uses the real preparer and reviewer and keeps client facts separate in the approved package', async () => {
+      const created = await post(
+        '/clients/' + clientA + '/requirements',
+        {
+          ...content,
+          clientNotes: 'Client confirmed the content owner.',
+          assumptions: 'Internal assumption: shared identity will be available.',
+          internalRecommendations: 'Review the identity contract.',
+        },
+        tokenWriter,
+      );
+      expect(created.status).toBe(201);
+      let r = created.body.data;
+      expect(r.preparedById).toBe(userWriter);
+      r = (
+        await patch(
+          '/requirements/' + r.id + '/status',
+          {
+            status: 'UNDER_REVIEW',
+            expectedVersion: r.lockVersion,
+          },
+          tokenWriter,
+        )
+      ).body.data;
+      const forged = await patch('/requirements/' + r.id + '/status', {
+        status: 'CONFIRMED',
+        expectedVersion: r.lockVersion,
+        confirmedById: userWriter,
+        confirmedAt: '2000-01-01T00:00:00Z',
+      });
+      expect(forged.status).toBe(400);
+      const before = Date.now();
+      const confirmed = await patch('/requirements/' + r.id + '/status', {
+        status: 'CONFIRMED',
+        expectedVersion: r.lockVersion,
+      });
+      expect(confirmed.status).toBe(200);
+      r = confirmed.body.data;
+      expect(r.confirmedById).toBe(userA);
+      expect(r.preparedById).toBe(userWriter);
+      expect(new Date(r.confirmedAt).getTime()).toBeGreaterThanOrEqual(before);
+      expect(new Date(r.confirmedAt).getTime()).toBeLessThanOrEqual(Date.now());
+      const snapshot = (await get('/requirements/' + r.id + '/export?version=1')).body.data;
+      expect(snapshot.preparedBy.id).toBe(userWriter);
+      expect(snapshot.confirmedBy.id).toBe(userA);
+      expect(snapshot.confirmedAt).toBe(r.confirmedAt);
+      expect(snapshot.clientProvided.notes).toBe('Client confirmed the content owner.');
+      expect(snapshot.internal.assumptions).toBe(
+        'Internal assumption: shared identity will be available.',
+      );
+      expect(snapshot.internal.recommendations).toBe('Review the identity contract.');
+    });
+
+    it('enforces same-agency wrong-client links and foreign preparer constraints in PostgreSQL', async () => {
+      const r = await create();
+      const wrongClient = await request(app.getHttpServer())
+        .post('/api/clients/' + clientA2 + '/files/upload')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .field('requirementId', r.id)
+        .attach('file', Buffer.from('Wrong client'), {
+          filename: 'brief.txt',
+          contentType: 'text/plain',
+        });
+      expect(wrongClient.status).toBe(404);
+      const foreignUser = await db.user.findFirstOrThrow({ where: { agencyId: ids[1] } });
+      await expect(
+        db.clientRequirement.update({
+          where: { id: r.id },
+          data: { preparedById: foreignUser.id },
+        }),
+      ).rejects.toMatchObject({ code: 'P2003' });
+      await expect(
+        db.clientNote.create({
+          data: {
+            agencyId: ids[0],
+            clientId: clientA2,
+            requirementId: r.id,
+            createdById: userA,
+            body: 'Invalid client relation',
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'P2003' });
+      expect((await get('/requirements/' + r.id)).body.data.preparedById).toBe(userA);
+      expect(await db.clientFile.count({ where: { requirementId: r.id } })).toBe(0);
+    });
+
+    it.each(['create', 'edit', 'confirm'] as const)(
+      'rolls back %s content, items, versions, snapshots and metadata when audit persistence fails',
+      async (stage) => {
+        let r = await create();
+        if (stage === 'confirm')
+          r = (
+            await patch('/requirements/' + r.id + '/status', {
+              status: 'UNDER_REVIEW',
+              expectedVersion: r.lockVersion,
+            })
+          ).body.data;
+        const read = () =>
+          db.clientRequirement.findUniqueOrThrow({
+            where: { id: r.id },
+            include: { items: { orderBy: { position: 'asc' } } },
+          });
+        const counts = async () => ({
+          requirements: await db.clientRequirement.count({ where: { agencyId: ids[0] } }),
+          items: await db.requirementItem.count({ where: { agencyId: ids[0] } }),
+          revisions: await db.requirementRevision.count({ where: { agencyId: ids[0] } }),
+          activity: await db.auditLog.count({ where: { agencyId: ids[0] } }),
+        });
+        const before = await read();
+        const beforeCounts = await counts();
+        const audit = jest
+          .spyOn(app.get(AccessService), 'audit')
+          .mockRejectedValueOnce(new Error('Private audit persistence failure'));
+        try {
+          const response =
+            stage === 'create'
+              ? await post('/clients/' + clientA + '/requirements', {
+                  ...content,
+                  title: 'Must roll back ' + suffix,
+                })
+              : stage === 'edit'
+                ? await patch('/requirements/' + r.id, {
+                    ...content,
+                    title: 'Must roll back',
+                    items: [{ title: 'Replacement item' }],
+                    expectedVersion: r.lockVersion,
+                  })
+                : await patch('/requirements/' + r.id + '/status', {
+                    status: 'CONFIRMED',
+                    expectedVersion: r.lockVersion,
+                  });
+          expect(response.status).toBe(500);
+          expect(response.body).toMatchObject({
+            success: false,
+            code: 'INTERNAL_ERROR',
+            details: {},
+          });
+          expect(JSON.stringify(response.body)).not.toMatch(/Private audit|stack|Prisma/);
+        } finally {
+          audit.mockRestore();
+        }
+        expect(await read()).toEqual(before);
+        expect(await counts()).toEqual(beforeCounts);
+      },
+    );
+
+    it('allows exactly one concurrent edit or submission and returns actionable conflict metadata', async () => {
+      const r = await create();
+      const results = await Promise.all([
+        patch('/requirements/' + r.id, {
+          ...content,
+          title: 'Concurrent editor title',
+          expectedVersion: 1,
+        }),
+        patch('/requirements/' + r.id + '/status', { status: 'UNDER_REVIEW', expectedVersion: 1 }),
+      ]);
+      expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+      const conflict = results.find((result) => result.status === 409)!;
+      expect(['STALE_VERSION', 'CONFLICT']).toContain(conflict.body.code);
+      expect(conflict.body.details).toMatchObject({
+        requirementId: r.id,
+        expectedVersion: 1,
+        currentVersion: 2,
+        reloadRequired: true,
+      });
+      const current = (await get('/requirements/' + r.id)).body.data;
+      expect(current.lockVersion).toBe(2);
+      expect(conflict.body.details.currentStatus).toBe(current.status);
+      expect(current.items.map((item: { position: number }) => item.position)).toEqual([0, 1]);
+      expect(
+        await db.auditLog.count({ where: { entityType: 'requirement', entityId: r.id } }),
+      ).toBe(2);
+    });
+
+    it('allows exactly one competing review decision and never duplicates an approved snapshot', async () => {
+      let r = await create();
+      r = (
+        await patch('/requirements/' + r.id + '/status', {
+          status: 'UNDER_REVIEW',
+          expectedVersion: r.lockVersion,
+        })
+      ).body.data;
+      const results = await Promise.all([
+        patch('/requirements/' + r.id + '/status', {
+          status: 'CONFIRMED',
+          expectedVersion: r.lockVersion,
+        }),
+        patch('/requirements/' + r.id + '/status', {
+          status: 'CHANGES_REQUESTED',
+          reason: 'Clarify the client objective',
+          expectedVersion: r.lockVersion,
+        }),
+      ]);
+      expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+      const conflict = results.find((result) => result.status === 409)!;
+      expect(conflict.body.details).toMatchObject({
+        requirementId: r.id,
+        expectedVersion: 2,
+        currentVersion: 3,
+        reloadRequired: true,
+      });
+      const current = (await get('/requirements/' + r.id)).body.data;
+      expect(current.lockVersion).toBe(3);
+      const count = await db.requirementRevision.count({ where: { requirementId: r.id } });
+      expect(count).toBe(current.status === 'CONFIRMED' ? 1 : 0);
+      expect(current.confirmedById).toBe(current.status === 'CONFIRMED' ? userA : null);
+    });
+
+    it('rejects delayed edits after confirmation and has no destructive requirement deletion route', async () => {
+      let r = await create();
+      r = (
+        await patch('/requirements/' + r.id + '/status', {
+          status: 'UNDER_REVIEW',
+          expectedVersion: r.lockVersion,
+        })
+      ).body.data;
+      r = (
+        await patch('/requirements/' + r.id + '/status', {
+          status: 'CONFIRMED',
+          expectedVersion: r.lockVersion,
+        })
+      ).body.data;
+      const snapshot = (await get('/requirements/' + r.id + '/export?version=1')).body.data;
+      const stale = await patch('/requirements/' + r.id, {
+        ...content,
+        title: 'Delayed writer',
+        expectedVersion: 1,
+      });
+      expect(stale.status).toBe(409);
+      expect(stale.body).toMatchObject({
+        code: 'STALE_VERSION',
+        details: {
+          expectedVersion: 1,
+          currentVersion: r.lockVersion,
+          currentStatus: 'CONFIRMED',
+          reloadRequired: true,
+        },
+      });
+      const locked = await patch('/requirements/' + r.id, {
+        ...content,
+        title: 'Direct overwrite',
+        expectedVersion: r.lockVersion,
+      });
+      expect(locked.status).toBe(409);
+      expect(locked.body.code).toBe('CONTENT_LOCKED');
+      const deleted = await request(app.getHttpServer())
+        .delete('/api/requirements/' + r.id)
+        .set('Authorization', 'Bearer ' + tokenA);
+      expect(deleted.status).toBe(404);
+      expect((await get('/requirements/' + r.id + '/export?version=1')).body.data).toEqual(
+        snapshot,
+      );
+      expect((await get('/requirements/' + r.id)).body.data.status).toBe('CONFIRMED');
+    });
   });
 });

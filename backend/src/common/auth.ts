@@ -34,6 +34,9 @@ export interface Actor {
   role: string;
   permissions: string[];
 }
+export function assertPermissions(actor: Actor, ...keys: string[]) {
+  if (!keys.every((key) => actor.permissions.includes(key))) throw new ForbiddenException();
+}
 export const Permissions = (...keys: string[]) => SetMetadata('permissions', keys);
 export const CurrentActor = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): Actor => ctx.switchToHttp().getRequest().actor,
@@ -83,7 +86,7 @@ export class JwtPermissionGuard implements CanActivate {
         context.getHandler(),
         context.getClass(),
       ]) ?? [];
-    if (!keys.every((key) => actor.permissions.includes(key))) throw new ForbiddenException();
+    assertPermissions(actor, ...keys);
     return true;
   }
 }

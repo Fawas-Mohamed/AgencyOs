@@ -106,11 +106,11 @@ export class RequirementContentDto {
   @IsOptional() @IsString() @Matches(/^[A-Z]{3}$/) currency?: string | null;
 }
 export class EditRequirementDto extends RequirementContentDto {
-  @IsInt() @Min(1) expectedVersion: number;
+  @IsInt() @Min(1) @Max(2147483647) expectedVersion: number;
 }
 export class ChangeStatusDto {
   @IsEnum(RequirementStatus) status: RequirementStatus;
-  @IsInt() @Min(1) expectedVersion: number;
+  @IsInt() @Min(1) @Max(2147483647) expectedVersion: number;
   @IsOptional() @Transform(trim) @IsString() @MaxLength(2000) reason?: string;
 }
 export class CreateCommunicationDto {
