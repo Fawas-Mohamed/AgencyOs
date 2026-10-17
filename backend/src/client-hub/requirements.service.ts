@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Actor } from '../common/auth';
+import { Actor, assertPermissions } from '../common/auth';
 import { ApiError } from '../common/http';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccessService, fileSelect, pageArgs, pageResult, userSelect } from './access.service';
@@ -22,6 +22,52 @@ export class RequirementsService {
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
   ) {}
+  private conflict(
+    record: { id: string; lockVersion: number; status: string },
+    expectedVersion: number,
+    code = 'STALE_VERSION',
+  ) {
+    return new ApiError(
+      409,
+      code,
+      'Requirement changed; reload the latest version before retrying',
+      {
+        requirementId: record.id,
+        expectedVersion,
+        currentVersion: record.lockVersion,
+        currentStatus: record.status,
+        reloadRequired: true,
+      },
+    );
+  }
+  private assertVersion(
+    record: { id: string; lockVersion: number; status: string },
+    expectedVersion: number,
+  ) {
+    if (record.lockVersion !== expectedVersion) throw this.conflict(record, expectedVersion);
+  }
+  private async mutate<T>(
+    actor: Actor,
+    id: string,
+    expectedVersion: number,
+    operation: (db: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await this.prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    } catch (error) {
+      const stale =
+        error instanceof ApiError &&
+        (error.getResponse() as { code?: string }).code === 'STALE_VERSION';
+      const concurrent =
+        error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+      if (!stale && !concurrent) throw error;
+      // Read after rollback, always scoped to the authenticated agency.
+      const current = await this.access.requirement(actor, id);
+      throw this.conflict(current, expectedVersion, concurrent ? 'CONFLICT' : 'STALE_VERSION');
+    }
+  }
   private content(dto: RequirementContentDto) {
     if (
       dto.referenceLinks.some((link) => {
@@ -56,6 +102,7 @@ export class RequirementsService {
     };
   }
   async list(actor: Actor, clientId: string, query: RequirementQuery) {
+    assertPermissions(actor, 'client.read', 'requirement.read');
     await this.access.client(actor, clientId);
     const where: Prisma.ClientRequirementWhereInput = {
       agencyId: actor.agencyId,
@@ -82,6 +129,7 @@ export class RequirementsService {
     return pageResult(items, total, query);
   }
   async detail(actor: Actor, id: string) {
+    assertPermissions(actor, 'requirement.read');
     await this.access.requirement(actor, id);
     const requirement = await this.prisma.clientRequirement.findFirstOrThrow({
       where: { id, agencyId: actor.agencyId },
@@ -159,6 +207,7 @@ export class RequirementsService {
     };
   }
   async create(actor: Actor, clientId: string, dto: RequirementContentDto) {
+    assertPermissions(actor, 'requirement.write');
     const content = this.content(dto);
     return this.prisma.$transaction(
       async (db) => {
@@ -188,166 +237,165 @@ export class RequirementsService {
     );
   }
   async edit(actor: Actor, id: string, dto: EditRequirementDto) {
+    assertPermissions(actor, 'requirement.write');
     const content = this.content(dto);
-    return this.prisma.$transaction(
-      async (db) => {
-        const record = await this.access.requirement(actor, id, db);
-        await this.access.client(actor, record.clientId, db, true);
-        assertEditable(record.status);
-        const changed = await db.clientRequirement.updateMany({
-          where: {
-            id,
-            agencyId: actor.agencyId,
-            lockVersion: dto.expectedVersion,
-            status: record.status,
-          },
-          data: { ...content, lockVersion: { increment: 1 } },
-        });
-        if (changed.count !== 1)
-          throw new ApiError(409, 'STALE_VERSION', 'Record changed; reload and retry');
-        await db.requirementItem.deleteMany({
-          where: { requirementId: id, agencyId: actor.agencyId },
-        });
-        await db.requirementItem.createMany({
-          data: dto.items.map((item, position) => ({
-            ...item,
-            position,
-            agencyId: actor.agencyId,
-            requirementId: id,
-          })),
-        });
-        await this.access.audit(
-          db,
-          actor,
-          record.clientId,
-          'REQUIREMENT_UPDATED',
-          'requirement',
+    return this.mutate(actor, id, dto.expectedVersion, async (db) => {
+      const record = await this.access.requirement(actor, id, db);
+      await this.access.client(actor, record.clientId, db, true);
+      this.assertVersion(record, dto.expectedVersion);
+      assertEditable(record.status);
+      const changed = await db.clientRequirement.updateMany({
+        where: {
           id,
-          'Requirement content updated',
-          { version: record.version },
-        );
-        return db.clientRequirement.findFirstOrThrow({
-          where: { id, agencyId: actor.agencyId },
-          include: requirementInclude,
-        });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+          agencyId: actor.agencyId,
+          lockVersion: dto.expectedVersion,
+          status: record.status,
+        },
+        data: { ...content, lockVersion: { increment: 1 } },
+      });
+      if (changed.count !== 1)
+        throw new ApiError(409, 'STALE_VERSION', 'Record changed; reload and retry');
+      await db.requirementItem.deleteMany({
+        where: { requirementId: id, agencyId: actor.agencyId },
+      });
+      await db.requirementItem.createMany({
+        data: dto.items.map((item, position) => ({
+          ...item,
+          position,
+          agencyId: actor.agencyId,
+          requirementId: id,
+        })),
+      });
+      await this.access.audit(
+        db,
+        actor,
+        record.clientId,
+        'REQUIREMENT_UPDATED',
+        'requirement',
+        id,
+        'Requirement content updated',
+        { version: record.version },
+      );
+      return db.clientRequirement.findFirstOrThrow({
+        where: { id, agencyId: actor.agencyId },
+        include: requirementInclude,
+      });
+    });
   }
   async changeStatus(actor: Actor, id: string, dto: ChangeStatusDto) {
-    return this.prisma.$transaction(
-      async (db) => {
-        const record = await this.access.requirement(actor, id, db);
-        await this.access.client(actor, record.clientId, db, true);
-        assertTransition(record.status, dto.status, dto.reason);
-        if (
-          (record.status === 'CONFIRMED' ||
-            record.status === 'UNDER_REVIEW' ||
-            ['CONFIRMED', 'CHANGES_REQUESTED'].includes(dto.status)) &&
-          !actor.permissions.includes('requirement.review')
-        )
-          throw new ApiError(403, 'FORBIDDEN', 'Review permission required');
-        const reopening = record.status === 'CONFIRMED' && dto.status === 'DRAFT';
-        const changed = await db.clientRequirement.updateMany({
-          where: {
-            id,
-            agencyId: actor.agencyId,
-            lockVersion: dto.expectedVersion,
-            status: record.status,
-          },
-          data: {
-            status: dto.status,
-            lockVersion: { increment: 1 },
-            ...(reopening
-              ? { version: { increment: 1 }, confirmedAt: null, confirmedById: null }
-              : {}),
-            ...(dto.status === 'CONFIRMED'
-              ? { confirmedAt: new Date(), confirmedById: actor.userId }
-              : {}),
-          },
-        });
-        if (changed.count !== 1)
-          throw new ApiError(409, 'STALE_VERSION', 'Record changed; reload and retry');
-        const updated = await db.clientRequirement.findFirstOrThrow({
-          where: { id, agencyId: actor.agencyId },
-          include: requirementInclude,
-        });
-        if (dto.status === 'CONFIRMED') {
-          const references = await db.clientFile.findMany({
-            where: {
-              agencyId: actor.agencyId,
-              requirementId: id,
-              clientId: record.clientId,
-              archivedAt: null,
-            },
-            select: fileSelect,
-            orderBy: { createdAt: 'asc' },
-          });
-          const snapshot = JSON.parse(
-            JSON.stringify({
-              schemaVersion: 1,
-              requirementId: id,
-              clientId: record.clientId,
-              version: updated.version,
-              title: updated.title,
-              objective: updated.objective,
-              services: updated.services,
-              items: updated.items,
-              designPreferences: updated.designPreferences,
-              referenceLinks: updated.referenceLinks,
-              references,
-              clientProvided: {
-                budgetMin: updated.budgetMin,
-                budgetMax: updated.budgetMax,
-                currency: updated.currency,
-                timeline: updated.timeline,
-                targetDate: updated.targetDate,
-                constraints: updated.constraints,
-                notes: updated.clientNotes,
-              },
-              internal: {
-                assumptions: updated.assumptions,
-                recommendations: updated.internalRecommendations,
-              },
-              preparedBy: updated.preparedBy,
-              confirmedBy: updated.confirmedBy,
-              confirmedAt: updated.confirmedAt,
-            }),
-          ) as Prisma.InputJsonValue;
-          await db.requirementRevision.create({
-            data: {
-              agencyId: actor.agencyId,
-              requirementId: id,
-              version: updated.version,
-              snapshot,
-              confirmedById: actor.userId,
-              confirmedAt: updated.confirmedAt!,
-            },
-          });
-        }
-        await this.access.audit(
-          db,
-          actor,
-          record.clientId,
-          'REQUIREMENT_' + dto.status,
-          'requirement',
+    assertPermissions(actor, 'requirement.write');
+    return this.mutate(actor, id, dto.expectedVersion, async (db) => {
+      const record = await this.access.requirement(actor, id, db);
+      await this.access.client(actor, record.clientId, db, true);
+      this.assertVersion(record, dto.expectedVersion);
+      assertTransition(record.status, dto.status, dto.reason);
+      if (
+        (record.status === 'CONFIRMED' ||
+          record.status === 'UNDER_REVIEW' ||
+          ['CONFIRMED', 'CHANGES_REQUESTED'].includes(dto.status)) &&
+        !actor.permissions.includes('requirement.review')
+      )
+        throw new ApiError(403, 'FORBIDDEN', 'Review permission required');
+      const reopening = record.status === 'CONFIRMED' && dto.status === 'DRAFT';
+      const changed = await db.clientRequirement.updateMany({
+        where: {
           id,
-          reopening
-            ? 'Confirmed requirement reopened as a new draft version'
-            : 'Requirement status changed to ' + dto.status,
-          {
-            from: record.status,
-            to: dto.status,
-            version: updated.version,
-            reason: dto.reason ?? '',
+          agencyId: actor.agencyId,
+          lockVersion: dto.expectedVersion,
+          status: record.status,
+        },
+        data: {
+          status: dto.status,
+          lockVersion: { increment: 1 },
+          ...(reopening
+            ? { version: { increment: 1 }, confirmedAt: null, confirmedById: null }
+            : {}),
+          ...(dto.status === 'CONFIRMED'
+            ? { confirmedAt: new Date(), confirmedById: actor.userId }
+            : {}),
+        },
+      });
+      if (changed.count !== 1)
+        throw new ApiError(409, 'STALE_VERSION', 'Record changed; reload and retry');
+      const updated = await db.clientRequirement.findFirstOrThrow({
+        where: { id, agencyId: actor.agencyId },
+        include: requirementInclude,
+      });
+      if (dto.status === 'CONFIRMED') {
+        const references = await db.clientFile.findMany({
+          where: {
+            agencyId: actor.agencyId,
+            requirementId: id,
+            clientId: record.clientId,
+            archivedAt: null,
           },
-        );
-        return updated;
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+          select: fileSelect,
+          orderBy: { createdAt: 'asc' },
+        });
+        const snapshot = JSON.parse(
+          JSON.stringify({
+            schemaVersion: 1,
+            requirementId: id,
+            clientId: record.clientId,
+            version: updated.version,
+            title: updated.title,
+            objective: updated.objective,
+            services: updated.services,
+            items: updated.items,
+            designPreferences: updated.designPreferences,
+            referenceLinks: updated.referenceLinks,
+            references,
+            clientProvided: {
+              budgetMin: updated.budgetMin,
+              budgetMax: updated.budgetMax,
+              currency: updated.currency,
+              timeline: updated.timeline,
+              targetDate: updated.targetDate,
+              constraints: updated.constraints,
+              notes: updated.clientNotes,
+            },
+            internal: {
+              assumptions: updated.assumptions,
+              recommendations: updated.internalRecommendations,
+            },
+            preparedBy: updated.preparedBy,
+            confirmedBy: updated.confirmedBy,
+            confirmedAt: updated.confirmedAt,
+          }),
+        ) as Prisma.InputJsonValue;
+        await db.requirementRevision.create({
+          data: {
+            agencyId: actor.agencyId,
+            requirementId: id,
+            version: updated.version,
+            snapshot,
+            confirmedById: actor.userId,
+            confirmedAt: updated.confirmedAt!,
+          },
+        });
+      }
+      await this.access.audit(
+        db,
+        actor,
+        record.clientId,
+        'REQUIREMENT_' + dto.status,
+        'requirement',
+        id,
+        reopening
+          ? 'Confirmed requirement reopened as a new draft version'
+          : 'Requirement status changed to ' + dto.status,
+        {
+          from: record.status,
+          to: dto.status,
+          version: updated.version,
+          reason: dto.reason ?? '',
+        },
+      );
+      return updated;
+    });
   }
   async export(actor: Actor, id: string, version?: number) {
+    assertPermissions(actor, 'requirement.read', 'file.read');
     const record = await this.access.requirement(actor, id);
     if (!version && record.status !== 'CONFIRMED')
       throw new ApiError(
