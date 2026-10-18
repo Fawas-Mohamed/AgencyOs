@@ -3,15 +3,16 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { api } from '@/lib/api/client';
+import { FormFeedback } from '@/components/ui/form-feedback';
+import { useSubmission } from '@/lib/utils/form-state';
 import { Button, ErrorNotice, Field } from '@/components/ui/primitives';
 export default function Login() {
-  const [busy, setBusy] = useState(false);
+  const { busy, begin, end } = useSubmission();
   const [error, setError] = useState<unknown>(null);
   const router = useRouter();
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
-    setBusy(true);
+    if (!begin()) return;
     setError(null);
     const form = new FormData(event.currentTarget);
     try {
@@ -23,7 +24,7 @@ export default function Login() {
       router.refresh();
     } catch (e) {
       setError(e);
-      setBusy(false);
+      end();
     }
   }
   return (
@@ -33,31 +34,33 @@ export default function Login() {
         <h1 className="mt-4">Sign in</h1>
         <p className="mt-2 mb-5 text-secondary">Access your client workspaces.</p>
         <ErrorNotice error={error} />
-        <form className="space-y-4" onSubmit={submit}>
-          <Field label="Email">
-            <input
-              name="email"
-              type="email"
-              autoComplete="username"
-              required
-              maxLength={254}
-              disabled={busy}
-            />
-          </Field>
-          <Field label="Password">
-            <input
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              maxLength={200}
-              disabled={busy}
-            />
-          </Field>
-          <Button type="submit" className="w-full" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </Button>
-        </form>
+        <FormFeedback error={error}>
+          <form className="space-y-4" onSubmit={submit}>
+            <Field label="Email">
+              <input
+                name="email"
+                type="email"
+                autoComplete="username"
+                required
+                maxLength={254}
+                disabled={busy}
+              />
+            </Field>
+            <Field label="Password">
+              <input
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                maxLength={200}
+                disabled={busy}
+              />
+            </Field>
+            <Button type="submit" className="w-full" disabled={busy}>
+              {busy ? 'Signing in…' : 'Sign in'}
+            </Button>
+          </form>
+        </FormFeedback>
       </div>
     </main>
   );

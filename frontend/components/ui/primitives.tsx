@@ -2,6 +2,7 @@
 import { cloneElement, isValidElement, useId } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { AlertCircle, CheckCircle2, Inbox } from 'lucide-react';
+import { useFieldError } from '@/lib/utils/form-state';
 import { ApiFailure } from '@/lib/api/client';
 import { label } from '@/lib/utils/format';
 export function Button({
@@ -16,27 +17,55 @@ export function Button({
 export function Field({
   label: caption,
   help,
+  name,
+  error,
   children,
 }: {
   label: string;
   help?: string;
+  name?: string;
+  error?: string;
   children: ReactNode;
 }) {
   const generatedId = useId();
-  const control = isValidElement<{ id?: string; 'aria-describedby'?: string }>(children)
+  const control = isValidElement<{
+    id?: string;
+    name?: string;
+    'aria-describedby'?: string;
+    'aria-invalid'?: boolean;
+  }>(children)
     ? children
     : null;
+  const fieldName = name ?? control?.props.name;
+  const contextError = useFieldError(fieldName);
+  const fieldError = error ?? contextError;
+  const errorId = generatedId + '-error';
   const controlId = control?.props.id ?? generatedId;
   const helpId = generatedId + '-help';
   const describedBy =
-    [control?.props['aria-describedby'], help ? helpId : undefined].filter(Boolean).join(' ') ||
-    undefined;
+    [
+      control?.props['aria-describedby'],
+      help ? helpId : undefined,
+      fieldError ? errorId : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ') || undefined;
   return (
     <div className="field">
       <label htmlFor={controlId}>{caption}</label>
       {control
-        ? cloneElement(control, { id: controlId, 'aria-describedby': describedBy })
+        ? cloneElement(control, {
+            id: controlId,
+            name: fieldName,
+            'aria-describedby': describedBy,
+            'aria-invalid': Boolean(fieldError) || undefined,
+          })
         : children}
+      {fieldError && (
+        <span className="field-error" id={errorId}>
+          {fieldError}
+        </span>
+      )}
       {help && (
         <span className="help" id={helpId}>
           {help}
@@ -91,7 +120,7 @@ export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => vo
         </ul>
       )}
       {retry && (
-        <button className="underline mt-2" onClick={retry}>
+        <button type="button" className="underline mt-2" onClick={retry}>
           Retry
         </button>
       )}

@@ -2,12 +2,18 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Bell, Building2, LogOut, Menu, Search, X } from 'lucide-react';
 import { api, ApiFailure, useResource } from '@/lib/api/client';
 import type { Actor } from '@/lib/types/hub';
 import { Button, ErrorNotice, Loading } from '@/components/ui/primitives';
+import {
+  FlashMessage,
+  NavigationGuard,
+  useNavigationGuard,
+} from '@/components/ui/navigation-guard';
+import { useSubmission } from '@/lib/utils/form-state';
 const ActorContext = createContext<Actor | null>(null);
 export function useActor() {
   const actor = useContext(ActorContext);
@@ -15,9 +21,18 @@ export function useActor() {
   return actor;
 }
 export function Shell({ children }: { children: ReactNode }) {
+  return (
+    <NavigationGuard>
+      <ShellContent>{children}</ShellContent>
+    </NavigationGuard>
+  );
+}
+function ShellContent({ children }: { children: ReactNode }) {
+  const guard = useNavigationGuard();
+  const sidebar = useRef<HTMLElement>(null);
   const { data: actor, loading, error, reload } = useResource<Actor>('/auth/me');
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const { busy, begin, end } = useSubmission();
   const [logoutError, setLogoutError] = useState<unknown>(null);
   const router = useRouter();
   const pathname = usePathname();
@@ -27,15 +42,53 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (error instanceof ApiFailure && error.status === 401) router.replace('/login');
   }, [error, router]);
+  useEffect(() => {
+    if (!open || !sidebar.current) return;
+    const trigger = document.activeElement as HTMLElement | null;
+    const controls = () =>
+      Array.from(sidebar.current!.querySelectorAll<HTMLElement>('a[href],button:not([disabled])'));
+    controls()[0]?.focus();
+    function keyboard(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+      }
+      if (event.key === 'Tab') {
+        const elements = controls(),
+          first = elements[0],
+          last = elements[elements.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    }
+    document.addEventListener('keydown', keyboard);
+    return () => {
+      document.removeEventListener('keydown', keyboard);
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [open]);
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const closeOnDesktop = () => {
+      if (desktop.matches) setOpen(false);
+    };
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => desktop.removeEventListener('change', closeOnDesktop);
+  }, []);
   async function logout() {
-    setBusy(true);
+    if (!begin()) return;
     try {
       await api('/auth/logout', { method: 'POST' });
       router.replace('/login');
       router.refresh();
     } catch (e) {
       setLogoutError(e);
-      setBusy(false);
+      end();
     }
   }
   if (loading)
@@ -60,7 +113,13 @@ export function Shell({ children }: { children: ReactNode }) {
             onClick={() => setOpen(false)}
           />
         )}
-        <aside className={'sidebar ' + (open ? 'sidebar-open' : '')}>
+        <aside
+          ref={sidebar}
+          role={open ? 'dialog' : undefined}
+          aria-modal={open || undefined}
+          aria-label={open ? 'Navigation' : undefined}
+          className={'sidebar ' + (open ? 'sidebar-open' : '')}
+        >
           <div className="brand">
             <Image
               src="/agency-os-logo.png"
@@ -89,7 +148,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <p>Client operating hub</p>
           </div>
         </aside>
-        <div className="app-body">
+        <div className="app-body" inert={open || undefined}>
           <header className="topbar">
             <button
               className="mobile-only"
@@ -115,11 +174,17 @@ export function Shell({ children }: { children: ReactNode }) {
               <span>{actor.displayName}</span>
               <small>{actor.role}</small>
             </div>
-            <Button variant="ghost" onClick={logout} disabled={busy} aria-label="Sign out">
+            <Button
+              variant="ghost"
+              onClick={() => guard.confirm(() => void logout())}
+              disabled={busy}
+              aria-label="Sign out"
+            >
               <LogOut size={18} />
             </Button>
           </header>
           <main id="main-content" className="main-content">
+            <FlashMessage />
             <ErrorNotice error={logoutError} />
             {children}
           </main>

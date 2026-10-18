@@ -15,6 +15,9 @@ import {
   Loading,
   Pagination,
 } from '@/components/ui/primitives';
+import { FormFeedback } from '@/components/ui/form-feedback';
+import { useDraft, useNavigationGuard } from '@/components/ui/navigation-guard';
+import { useSubmission } from '@/lib/utils/form-state';
 import { useActor } from './shell';
 export function ClientList({ initialQuery = '' }: { initialQuery?: string }) {
   const actor = useActor();
@@ -118,7 +121,9 @@ export function ClientForm({ clientId }: { clientId?: string }) {
   const actor = useActor();
   const router = useRouter();
   const resource = useResource<Hub>(clientId ? '/clients/' + clientId + '/hub' : null);
-  const [busy, setBusy] = useState(false);
+  const { busy, begin, end } = useSubmission();
+  const draft = useDraft();
+  const guard = useNavigationGuard();
   const [error, setError] = useState<unknown>(null);
   if (!actor.permissions.includes('client.write'))
     return <Empty title="You do not have permission to manage clients." />;
@@ -127,8 +132,7 @@ export function ClientForm({ clientId }: { clientId?: string }) {
   const client = resource.data?.client;
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
-    setBusy(true);
+    if (!begin()) return;
     setError(null);
     const values = new FormData(event.currentTarget);
     const body = {
@@ -145,10 +149,12 @@ export function ClientForm({ clientId }: { clientId?: string }) {
         method: clientId ? 'PATCH' : 'POST',
         body,
       });
-      router.push('/client-hub/clients/' + result.id + '?saved=1');
+      draft.markSaved();
+      guard.flash('Client saved successfully.');
+      router.push('/client-hub/clients/' + result.id);
     } catch (e) {
       setError(e);
-      setBusy(false);
+      end();
     }
   }
   return (
@@ -167,55 +173,66 @@ export function ClientForm({ clientId }: { clientId?: string }) {
         </div>
       </div>
       <ErrorNotice error={error} />
-      <form className="form-section max-w-3xl" onSubmit={submit}>
-        <fieldset disabled={busy} className="form-grid">
-          <Field label="Client name">
-            <input name="name" defaultValue={client?.name} required maxLength={160} />
-          </Field>
-          <Field label="Company">
-            <input name="company" defaultValue={client?.company} required maxLength={160} />
-          </Field>
-          <Field label="Primary contact">
-            <input name="contactName" defaultValue={client?.contactName} required maxLength={160} />
-          </Field>
-          <Field label="Email">
-            <input name="email" type="email" defaultValue={client?.email ?? ''} maxLength={254} />
-          </Field>
-          <Field label="Phone">
-            <input name="phone" type="tel" defaultValue={client?.phone ?? ''} maxLength={50} />
-          </Field>
-          <Field label="Website">
-            <input
-              name="website"
-              type="url"
-              defaultValue={client?.website ?? ''}
-              maxLength={2000}
-            />
-          </Field>
-          {client && (
-            <Field
-              label="Client status"
-              help="Archived clients remain available for history and their child records become read-only."
-            >
-              <select name="status" defaultValue={client.status}>
-                <option value="ACTIVE">Active</option>
-                <option value="ARCHIVED">Archived</option>
-              </select>
+      <FormFeedback error={error}>
+        <form
+          className="form-section max-w-3xl"
+          onSubmit={submit}
+          onChangeCapture={draft.markDirty}
+        >
+          <fieldset disabled={busy} className="form-grid">
+            <Field label="Client name">
+              <input name="name" defaultValue={client?.name} required maxLength={160} />
             </Field>
-          )}
-        </fieldset>
-        <div className="flex gap-3">
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Saving…' : 'Save client'}
-          </Button>
-          <Link
-            className="btn btn-secondary"
-            href={clientId ? '/client-hub/clients/' + clientId : '/client-hub'}
-          >
-            Cancel
-          </Link>
-        </div>
-      </form>
+            <Field label="Company">
+              <input name="company" defaultValue={client?.company} required maxLength={160} />
+            </Field>
+            <Field label="Primary contact">
+              <input
+                name="contactName"
+                defaultValue={client?.contactName}
+                required
+                maxLength={160}
+              />
+            </Field>
+            <Field label="Email">
+              <input name="email" type="email" defaultValue={client?.email ?? ''} maxLength={254} />
+            </Field>
+            <Field label="Phone">
+              <input name="phone" type="tel" defaultValue={client?.phone ?? ''} maxLength={50} />
+            </Field>
+            <Field label="Website">
+              <input
+                name="website"
+                type="url"
+                defaultValue={client?.website ?? ''}
+                maxLength={2000}
+              />
+            </Field>
+            {client && (
+              <Field
+                label="Client status"
+                help="Archived clients remain available for history and their child records become read-only."
+              >
+                <select name="status" defaultValue={client.status}>
+                  <option value="ACTIVE">Active</option>
+                  <option value="ARCHIVED">Archived</option>
+                </select>
+              </Field>
+            )}
+          </fieldset>
+          <div className="flex gap-3">
+            <Button type="submit" disabled={busy}>
+              {busy ? 'Saving…' : 'Save client'}
+            </Button>
+            <Link
+              className="btn btn-secondary"
+              href={clientId ? '/client-hub/clients/' + clientId : '/client-hub'}
+            >
+              Cancel
+            </Link>
+          </div>
+        </form>
+      </FormFeedback>
     </>
   );
 }
