@@ -4,7 +4,7 @@ import { ArrowLeft, Pencil } from 'lucide-react';
 import { useResource } from '@/lib/api/client';
 import type { Hub } from '@/lib/types/hub';
 import { dateTime } from '@/lib/utils/format';
-import { Badge, Empty, ErrorNotice, Loading, Notice } from '@/components/ui/primitives';
+import { Badge, Empty, ErrorNotice, Loading } from '@/components/ui/primitives';
 import { RequirementList } from './requirement-list';
 import { Communications, Files, Notes, Timeline } from './workspace-records';
 import { useActor } from './shell';
@@ -12,22 +12,23 @@ const tabs = [
   ['overview', 'Overview'],
   ['requirements', 'Requirements'],
   ['communications', 'Communications'],
-  ['files', 'Files & references'],
-  ['notes', 'Internal notes'],
-  ['timeline', 'Activity timeline'],
+  ['files', 'Files'],
+  ['notes', 'Notes'],
+  ['timeline', 'Activity'],
 ];
 export function Workspace({
   clientId,
   tab = 'overview',
-  saved = false,
+  requirementId,
 }: {
   clientId: string;
   tab?: string;
   saved?: boolean;
+  requirementId?: string;
 }) {
   const actor = useActor();
   const resource = useResource<Hub>('/clients/' + clientId + '/hub');
-  if (resource.loading) return <Loading />;
+  if (resource.loading && !resource.data) return <Loading />;
   if (resource.error) return <ErrorNotice error={resource.error} retry={resource.reload} />;
   if (!resource.data) return null;
   const hub = resource.data;
@@ -73,7 +74,6 @@ export function Workspace({
           </Link>
         )}
       </div>
-      {saved && <Notice>Client saved successfully.</Notice>}
       {!active && (
         <div className="panel p-4 mb-4 text-secondary">
           This client is archived. Its records remain available for historical review.
@@ -84,9 +84,15 @@ export function Workspace({
           <Link
             key={key}
             href={'/client-hub/clients/' + clientId + '?tab=' + key}
+            aria-label={title}
             aria-current={selected === key ? 'page' : undefined}
           >
             {title}
+            {key !== 'overview' && hub.counts[key as keyof Hub['counts']] !== null && (
+              <span aria-hidden="true" className="ml-2 text-xs">
+                {hub.counts[key as keyof Hub['counts']]}
+              </span>
+            )}
           </Link>
         ))}
       </nav>
@@ -212,10 +218,39 @@ export function Workspace({
           </section>
         </div>
       )}
+      {requirementId && ['communications', 'files', 'notes'].includes(selected) && (
+        <div className="panel p-4 mb-4 flex flex-wrap gap-3 justify-between">
+          <span>Showing entries linked to the selected requirement.</span>
+          <Link className="text-link" href={'?tab=' + selected}>
+            Show all client entries
+          </Link>
+        </div>
+      )}
       {selected === 'requirements' && <RequirementList clientId={clientId} active={active} />}
-      {selected === 'communications' && <Communications clientId={clientId} active={active} />}
-      {selected === 'files' && <Files clientId={clientId} active={active} />}
-      {selected === 'notes' && <Notes clientId={clientId} active={active} />}
+      {selected === 'communications' && (
+        <Communications
+          clientId={clientId}
+          active={active}
+          requirementId={requirementId}
+          onSaved={resource.reload}
+        />
+      )}
+      {selected === 'files' && (
+        <Files
+          clientId={clientId}
+          active={active}
+          requirementId={requirementId}
+          onSaved={resource.reload}
+        />
+      )}
+      {selected === 'notes' && (
+        <Notes
+          clientId={clientId}
+          active={active}
+          requirementId={requirementId}
+          onSaved={resource.reload}
+        />
+      )}
       {selected === 'timeline' && <Timeline clientId={clientId} />}
     </>
   );

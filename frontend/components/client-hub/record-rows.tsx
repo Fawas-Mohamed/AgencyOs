@@ -1,9 +1,12 @@
 'use client';
+import { useState } from 'react';
+import { downloadFile } from '@/lib/api/downloads';
+import { useSubmission } from '@/lib/utils/form-state';
 import Link from 'next/link';
 import { Download, ExternalLink, FileText } from 'lucide-react';
 import type { Activity, ClientFile, ClientNote, Communication } from '@/lib/types/hub';
 import { dateTime, label } from '@/lib/utils/format';
-import { Button } from '@/components/ui/primitives';
+import { Button, ErrorNotice } from '@/components/ui/primitives';
 export function CommunicationRow({ record }: { record: Communication }) {
   return (
     <article className="record-row">
@@ -12,7 +15,8 @@ export function CommunicationRow({ record }: { record: Communication }) {
         <span className="badge badge-neutral">{label(record.type)}</span>
       </div>
       <p className="text-xs text-secondary mt-2">
-        {dateTime(record.occurredAt)} · Logged by {record.createdBy.displayName}
+        Occurred {dateTime(record.occurredAt)} · Logged by {record.createdBy.displayName} on{' '}
+        {dateTime(record.createdAt)}
       </p>
       <p className="whitespace-pre-wrap break-words mt-3">{record.summary}</p>
       {record.participants.length > 0 && (
@@ -39,6 +43,14 @@ export function NoteRow({ note }: { note: ClientNote }) {
     <article className="record-row">
       <p className="text-xs font-medium text-secondary mb-2">Internal note</p>
       <p className="whitespace-pre-wrap break-words">{note.body}</p>
+      {note.requirementId && (
+        <Link
+          className="text-link text-xs inline-block mt-2"
+          href={'/client-hub/clients/' + note.clientId + '/requirements/' + note.requirementId}
+        >
+          Linked requirement
+        </Link>
+      )}
       <p className="text-xs text-secondary mt-3">
         {note.createdBy.displayName} · {dateTime(note.createdAt)}
       </p>
@@ -54,7 +66,19 @@ export function FileRow({
   onArchive?: (id: string) => void;
   busy?: boolean;
 }) {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api';
+  const download = useSubmission();
+  const [error, setError] = useState<unknown>(null);
+  async function fetchFile() {
+    if (!download.begin()) return;
+    setError(null);
+    try {
+      await downloadFile(file.id, file.originalName);
+    } catch (e) {
+      setError(e);
+    } finally {
+      download.end();
+    }
+  }
   return (
     <div className="record-row flex flex-wrap gap-3 justify-between">
       <div className="flex min-w-0 gap-3">
@@ -92,10 +116,10 @@ export function FileRow({
             Open link
           </a>
         ) : (
-          <a className="btn btn-secondary" href={base + '/files/' + file.id + '/download'}>
+          <Button variant="secondary" disabled={download.busy} onClick={fetchFile}>
             <Download size={15} />
-            Download
-          </a>
+            {download.busy ? 'Downloading...' : 'Download'}
+          </Button>
         )}
         {onArchive && !file.archivedAt && (
           <Button variant="ghost" disabled={busy} onClick={() => onArchive(file.id)}>
@@ -103,6 +127,11 @@ export function FileRow({
           </Button>
         )}
       </div>
+      {Boolean(error) && (
+        <div className="w-full">
+          <ErrorNotice error={error} retry={fetchFile} />
+        </div>
+      )}
     </div>
   );
 }

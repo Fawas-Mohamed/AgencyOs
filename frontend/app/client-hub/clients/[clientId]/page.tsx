@@ -4,9 +4,9 @@ export default async function Page({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ tab?: string; saved?: string }>;
+  searchParams: Promise<{ tab?: string; saved?: string; requirementId?: string }>;
 }) {
   const { clientId } = await params;
   const query = await searchParams;
-  return <Workspace clientId={clientId} tab={query.tab} saved={query.saved === '1'} />;
+  return <Workspace clientId={clientId} tab={query.tab} requirementId={query.requirementId} />;
 }

@@ -223,3 +223,59 @@
     @apply rounded-md border border-border p-4 space-y-4;
   }
 }
+
+@layer components {
+  .confirm-dialog {
+    width: calc(100% - 2rem);
+    @apply max-w-lg rounded-lg border border-border bg-surface p-5 text-ink shadow-lg;
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+  }
+  .confirm-dialog::backdrop {
+    @apply bg-ink/30;
+  }
+  .field-error {
+    @apply text-xs font-normal text-error;
+  }
+  [aria-invalid='true'] {
+    @apply border-error;
+  }
+  .flash-message {
+    @apply mb-4;
+  }
+  .flash-message .notice {
+    @apply bg-surface shadow-lg;
+  }
+  .panel,
+  .app-body,
+  .main-content,
+  .page-heading > div,
+  .record-row > div {
+    min-width: 0;
+  }
+  .record-row,
+  .notice,
+  .page-heading h1,
+  .detail-grid dd {
+    overflow-wrap: anywhere;
+  }
+  .notice > svg {
+    flex-shrink: 0;
+  }
+  .notice > div {
+    min-width: 0;
+  }
+  input,
+  select,
+  textarea {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .btn {
+    @apply max-w-full;
+    white-space: normal;
+  }
+  .tabs {
+    max-width: 100%;
+  }
+}
