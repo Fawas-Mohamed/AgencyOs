@@ -51,4 +51,19 @@ describe('foundation configuration boundary', () => {
       validateEnvironment({ ...configuration(), FRONTEND_URL: 'ftp://localhost' }),
     ).toThrow('FRONTEND_URL');
   });
+
+  it.each(['', 'application/octet-stream', 'text/plain,image/svg+xml'])(
+    'rejects unsupported or empty upload type configuration %s',
+    (types) => {
+      expect(() => validateEnvironment({ ...configuration(), ALLOWED_FILE_TYPES: types })).toThrow(
+        'ALLOWED_FILE_TYPES',
+      );
+    },
+  );
+  it('normalizes a configured MIME subset without enabling unsupported types', () => {
+    expect(
+      validateEnvironment({ ...configuration(), ALLOWED_FILE_TYPES: ' text/plain, text/plain ' })
+        .ALLOWED_FILE_TYPES,
+    ).toBe('text/plain');
+  });
 });

@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 export class ApiFailure extends Error {
   constructor(
     message: string,
@@ -48,17 +48,21 @@ export function useResource<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
+  const previousPath = useRef<string | null>(null);
   const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion((v) => v + 1), []);
   useEffect(() => {
     const controller = new AbortController();
     if (!path) {
+      setData(null);
+      previousPath.current = null;
       setLoading(false);
       return () => controller.abort();
     }
     setLoading(true);
     setError(null);
-    setData(null);
+    if (previousPath.current !== path) setData(null);
+    previousPath.current = path;
     api<T>(path, { signal: controller.signal })
       .then((value) => {
         if (!controller.signal.aborted) setData(value);

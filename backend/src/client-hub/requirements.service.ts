@@ -153,7 +153,7 @@ export class RequirementsService {
         ? this.prisma.clientFile.findMany({
             where: { ...where, archivedAt: null },
             select: fileSelect,
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             take: 100,
           })
         : null,
@@ -161,7 +161,7 @@ export class RequirementsService {
         ? this.prisma.clientNote.findMany({
             where,
             include: { createdBy: { select: userSelect } },
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             take: 100,
           })
         : null,
@@ -169,7 +169,7 @@ export class RequirementsService {
         ? this.prisma.clientCommunication.findMany({
             where,
             include: { createdBy: { select: userSelect } },
-            orderBy: { occurredAt: 'desc' },
+            orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
             take: 100,
           })
         : null,
@@ -177,7 +177,7 @@ export class RequirementsService {
         ? this.prisma.auditLog.findMany({
             where: { agencyId: actor.agencyId, entityType: 'requirement', entityId: id },
             include: { actor: { select: userSelect } },
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             take: 100,
           })
         : null,
@@ -330,7 +330,7 @@ export class RequirementsService {
             archivedAt: null,
           },
           select: fileSelect,
-          orderBy: { createdAt: 'asc' },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         });
         const snapshot = JSON.parse(
           JSON.stringify({

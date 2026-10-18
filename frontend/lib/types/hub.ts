@@ -102,6 +102,7 @@ export interface Communication {
 }
 export interface ClientNote {
   id: string;
+  clientId: string;
   body: string;
   requirementId: string | null;
   createdBy: UserRef;
@@ -128,6 +129,8 @@ export interface Activity {
   metadata: Record<string, unknown> | null;
 }
 export interface Hub {
+  summaryLimit: number;
+  counts: Record<'requirements' | 'communications' | 'notes' | 'files' | 'timeline', number | null>;
   client: Client;
   requirements: Requirement[] | null;
   communications: Communication[] | null;
@@ -136,4 +139,31 @@ export interface Hub {
   timeline: Activity[] | null;
   permissions: string[];
   relatedRecords: { kind: string; available: boolean; reason: string }[];
+}
+
+export interface ConfirmedPackage {
+  schemaVersion: 1;
+  requirementId: string;
+  clientId: string;
+  version: number;
+  title: string;
+  objective: string;
+  services: string[];
+  items: RequirementItem[];
+  designPreferences: string;
+  referenceLinks: string[];
+  references: ClientFile[];
+  clientProvided: {
+    budgetMin: string | null;
+    budgetMax: string | null;
+    currency: string | null;
+    timeline: string;
+    targetDate: string | null;
+    constraints: string;
+    notes: string;
+  };
+  internal: { assumptions: string; recommendations: string };
+  preparedBy: UserRef;
+  confirmedBy: UserRef;
+  confirmedAt: string;
 }

@@ -51,7 +51,45 @@ test('client, structured requirement, review, revision, communication, private f
   await page.getByLabel('Item title', { exact: true }).first().fill('Guided brief');
   await page.getByRole('button', { name: 'Add item', exact: true }).click();
   await page.getByLabel('Item title', { exact: true }).nth(1).fill('Approval history');
-  await page.getByRole('button', { name: 'Move item 2 up', exact: true }).click();
+  await page
+    .getByLabel('Item description', { exact: true })
+    .nth(1)
+    .fill('Preserve every approved version.');
+  await page.getByLabel('Category / type', { exact: true }).nth(1).fill('Functional');
+  await page.getByLabel('Priority', { exact: true }).nth(1).selectOption('MUST_HAVE');
+  await page
+    .getByLabel('Item notes', { exact: true })
+    .nth(1)
+    .fill('Approved scope stays immutable.');
+  await page.getByRole('button', { name: 'Add item', exact: true }).click();
+  await page.getByLabel('Item title', { exact: true }).nth(2).fill('Temporary item');
+  await page.getByRole('button', { name: 'Remove item 3', exact: true }).click();
+  await expect(page.getByLabel('Item title', { exact: true })).toHaveCount(2);
+  await page.getByRole('button', { name: 'Move item 2 up', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Item title', { exact: true }).first()).toBeFocused();
+  await page
+    .getByLabel('Design / UI preferences', { exact: true })
+    .fill('Compact accessible layouts.');
+  await page
+    .getByLabel('Reference websites and links', { exact: true })
+    .fill('https://example.com/inspiration');
+  await page.getByLabel('Target date', { exact: true }).fill('2027-12-15');
+  await page
+    .getByLabel('Expected timeline', { exact: true })
+    .fill('Client preference: six weeks, subject to review.');
+  await page
+    .getByLabel('Client-provided constraints', { exact: true })
+    .fill('Client requests compatibility with current systems.');
+  await page
+    .getByLabel('Additional client notes', { exact: true })
+    .fill('Client will review the brief.');
+  await page
+    .getByLabel('Internal assumptions', { exact: true })
+    .fill('Internal assumption: existing identity adapter is available.');
+  await page
+    .getByLabel('Internal recommendations', { exact: true })
+    .fill('Review accessibility before approval.');
   await expect(page.getByLabel('Item title', { exact: true }).first()).toHaveValue(
     'Approval history',
   );
@@ -63,6 +101,13 @@ test('client, structured requirement, review, revision, communication, private f
   await expect(page.getByRole('main').getByRole('alert')).toContainText(
     'Minimum budget must not exceed maximum budget',
   );
+  await expect(page.getByLabel('Maximum budget', { exact: true })).toHaveAttribute(
+    'aria-invalid',
+    'true',
+  );
+  await expect(page.getByLabel('Requirement title', { exact: true })).toHaveValue(
+    'Verified client portal',
+  );
   await page.getByLabel('Maximum budget', { exact: true }).fill('500.20');
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(
@@ -70,34 +115,6 @@ test('client, structured requirement, review, revision, communication, private f
   ).toBeVisible();
   const requirementId = new URL(page.url()).pathname.split('/').pop()!;
   const requirementUrl = clientUrl + '/requirements/' + requirementId;
-  await page.getByRole('link', { name: 'Review requirement', exact: true }).click();
-  await page.getByRole('button', { name: 'Submit for review', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Confirm requirement', exact: true }),
-  ).toBeVisible();
-  await page.getByRole('button', { name: 'Confirm requirement', exact: true }).click();
-  await expect(page.getByText(/Confirmed by Demo reviewer on/)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Edit requirement', exact: true })).toHaveCount(0);
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Download confirmed package', exact: true }).click(),
-  ]);
-  expect(download.suggestedFilename()).toContain('-v1.json');
-  await page
-    .getByLabel('Reason / review note', { exact: true })
-    .fill('Client asked for a controlled revision');
-  await page.getByRole('button', { name: 'Reopen as new draft version', exact: true }).click();
-  await expect(page.getByText('Version 2 · Prepared by', { exact: false })).toBeVisible();
-  await page.getByRole('link', { name: 'Edit requirement', exact: true }).click();
-  await page.getByLabel('Requirement title', { exact: true }).fill('Verified portal revision');
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'Verified portal revision', exact: true }),
-  ).toBeVisible();
-  const snapshot = await context.request.get(
-    '/api/requirements/' + requirementId + '/export?version=1',
-  );
-  expect((await snapshot.json()).data.title).toBe('Verified client portal');
   await page.goto(clientUrl + '?tab=communications');
   await page.getByRole('button', { name: 'Log communication', exact: true }).click();
   await page.getByLabel('Subject', { exact: true }).fill('Requirement review meeting');
@@ -120,9 +137,15 @@ test('client, structured requirement, review, revision, communication, private f
   await expect(page.getByText('verified-brief.txt', { exact: true })).toBeVisible();
   const [fileDownload] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('link', { name: 'Download', exact: true }).click(),
+    page.getByRole('button', { name: 'Download', exact: true }).click(),
   ]);
   expect(fileDownload.suggestedFilename()).toBe('verified-brief.txt');
+  await page.getByRole('button', { name: 'Add reference link', exact: true }).click();
+  await page.getByLabel('Reference name', { exact: true }).fill('Approved inspiration');
+  await page.getByLabel('Reference URL', { exact: true }).fill('https://example.com/brief');
+  await page.getByLabel('Linked requirement', { exact: true }).selectOption(requirementId);
+  await page.getByRole('button', { name: 'Save reference', exact: true }).click();
+  await expect(page.getByText('Approved inspiration', { exact: true })).toBeVisible();
   await page.goto(clientUrl + '?tab=notes');
   await page.getByRole('button', { name: 'Add internal note', exact: true }).click();
   await page
@@ -133,7 +156,89 @@ test('client, structured requirement, review, revision, communication, private f
   await expect(
     page.getByText('Internal clarification kept separate from communications.', { exact: true }),
   ).toBeVisible();
+  await page.goto(requirementUrl);
+  await page.getByRole('link', { name: 'Review requirement', exact: true }).click();
+  await expect(page).toHaveURL(requirementUrl + '/review');
+  await page.getByRole('button', { name: 'Submit for review', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Confirm requirement', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Confirm requirement', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Confirm version', exact: true })
+    .click();
+  await expect(page.getByText(/Confirmed by Demo reviewer on/)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Edit requirement', exact: true })).toHaveCount(0);
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Download confirmed package', exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toContain('-v1.json');
+  const originalApproved = (
+    await (
+      await context.request.get('/api/requirements/' + requirementId + '/export?version=1')
+    ).json()
+  ).data;
+  await page
+    .getByLabel('Reason / review note', { exact: true })
+    .fill('Client asked for a controlled revision');
+  await page.getByRole('button', { name: 'Reopen as new draft version', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Create draft revision', exact: true })
+    .click();
+  await expect(page.getByText('Version 2 · Prepared by', { exact: false })).toBeVisible();
+  await page.getByRole('link', { name: 'Edit requirement', exact: true }).click();
+  await page.getByLabel('Requirement title', { exact: true }).fill('Verified portal revision');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Verified portal revision', exact: true }),
+  ).toBeVisible();
+  const snapshot = await context.request.get(
+    '/api/requirements/' + requirementId + '/export?version=1',
+  );
+  const approved = (await snapshot.json()).data;
+  expect(approved).toEqual(originalApproved);
+  expect(approved.title).toBe('Verified client portal');
+  expect(approved.version).toBe(1);
+  expect(approved.services).toEqual(['Design', 'Web application']);
+  expect(approved.designPreferences).toBe('Compact accessible layouts.');
+  expect(approved.referenceLinks).toEqual(['https://example.com/inspiration']);
+  expect(approved.clientProvided).toMatchObject({
+    budgetMin: '200.1', // Prisma Decimal JSON omits insignificant trailing zeroes.
+    budgetMax: '500.2',
+    currency: 'LKR',
+    timeline: 'Client preference: six weeks, subject to review.',
+    notes: 'Client will review the brief.',
+  });
+  expect(approved.clientProvided.targetDate.slice(0, 10)).toBe('2027-12-15');
+  expect(approved.internal.assumptions).toBe(
+    'Internal assumption: existing identity adapter is available.',
+  );
+  expect(approved.items[0]).toMatchObject({
+    description: 'Preserve every approved version.',
+    category: 'Functional',
+    priority: 'MUST_HAVE',
+    notes: 'Approved scope stays immutable.',
+  });
+  expect(approved.references.map((file: { originalName: string }) => file.originalName)).toEqual(
+    expect.arrayContaining(['verified-brief.txt', 'Approved inspiration']),
+  );
+  expect(approved.items.map((item: { title: string }) => item.title)).toEqual([
+    'Approval history',
+    'Guided brief',
+  ]);
+  expect(
+    (await context.request.get('/api/requirements/' + requirementId + '/export')).status(),
+  ).toBe(409);
+  await expect(page.getByText('Active version: 2 · Draft', { exact: true })).toBeVisible();
+  await expect(page.getByText('Last confirmed version: 1', { exact: true })).toBeVisible();
   await page.goto(clientUrl + '?tab=timeline');
+  await expect(page.getByText('Private file uploaded', { exact: true })).toBeVisible();
+  await page.getByLabel('Timeline order', { exact: true }).selectOption('oldest');
+  await expect(page.locator('.timeline-item').first()).toContainText('Client created');
+  await page.getByLabel('Timeline order', { exact: true }).selectOption('newest');
   await expect(page.getByText('Private file uploaded', { exact: true })).toBeVisible();
   await page.screenshot({
     path: 'test-results/timeline-' + testInfo.project.name + '.png',

@@ -20,6 +20,9 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ClientStatus, CommunicationType, ItemPriority, RequirementStatus } from '@prisma/client';
+const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE_OR_INSTANT =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/;
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 export class PageQuery {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
@@ -36,8 +39,12 @@ export class RequirementQuery extends PageQuery {
 }
 export class CommunicationQuery extends PageQuery {
   @IsOptional() @IsEnum(CommunicationType) type?: CommunicationType;
-  @IsOptional() @IsDateString({ strict: true }) from?: string;
-  @IsOptional() @IsDateString({ strict: true }) to?: string;
+  @IsOptional() @IsDateString({ strict: true }) @Matches(DATE_OR_INSTANT) from?: string;
+  @IsOptional() @IsDateString({ strict: true }) @Matches(DATE_OR_INSTANT) to?: string;
+  @IsOptional() @IsUUID() requirementId?: string;
+}
+export class NoteQuery extends PageQuery {
+  @IsOptional() @IsUUID() requirementId?: string;
 }
 export class FileQuery extends PageQuery {
   @IsOptional()
@@ -47,7 +54,7 @@ export class FileQuery extends PageQuery {
   @IsOptional() @IsUUID() requirementId?: string;
 }
 export class ExportQuery {
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) version?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(2147483647) version?: number;
 }
 export class CreateClientDto {
   @Transform(trim) @IsString() @Length(1, 160) name: string;
@@ -117,7 +124,7 @@ export class CreateCommunicationDto {
   @IsEnum(CommunicationType) type: CommunicationType;
   @Transform(trim) @IsString() @Length(1, 180) subject: string;
   @Transform(trim) @IsString() @Length(1, 8000) summary: string;
-  @IsDateString({ strict: true }) occurredAt: string;
+  @IsDateString({ strict: true }) @Matches(INSTANT) occurredAt: string;
   @IsArray()
   @ArrayMaxSize(50)
   @IsString({ each: true })

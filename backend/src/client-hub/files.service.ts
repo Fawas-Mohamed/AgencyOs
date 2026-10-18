@@ -1,20 +1,21 @@
 import { Injectable, StreamableFile } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Actor } from '../common/auth';
+import { Actor, assertPermissions } from '../common/auth';
 import { ApiError } from '../common/http';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccessService, fileSelect, pageArgs, pageResult } from './access.service';
 import { FileLinkDto, FileQuery, FileUploadDto } from './dto/hub.dto';
-import { PrivateStorageService } from './private-storage.service';
+import { PrivateStorage } from './private-storage';
 import { assertEditable } from './workflow';
 @Injectable()
 export class FilesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
-    private readonly storage: PrivateStorageService,
+    private readonly storage: PrivateStorage,
   ) {}
   async list(actor: Actor, clientId: string, query: FileQuery) {
+    assertPermissions(actor, 'file.read');
     await this.access.client(actor, clientId);
     await this.access.linkedRequirement(actor, clientId, query.requirementId);
     const where: Prisma.ClientFileWhereInput = {
@@ -46,6 +47,7 @@ export class FilesService {
     if (requirement) assertEditable(requirement.status);
   }
   async createLink(actor: Actor, clientId: string, dto: FileLinkDto) {
+    assertPermissions(actor, 'file.write');
     const url = new URL(dto.referenceUrl);
     if (url.username || url.password)
       throw new ApiError(400, 'INVALID_URL', 'Reference URLs must not include credentials');
@@ -71,6 +73,7 @@ export class FilesService {
     );
   }
   async upload(actor: Actor, clientId: string, dto: FileUploadDto, file?: Express.Multer.File) {
+    assertPermissions(actor, 'file.write');
     if (!file) throw new ApiError(400, 'FILE_REQUIRED', 'Select a file');
     await this.access.client(actor, clientId, undefined, true);
     const linked = await this.access.linkedRequirement(actor, clientId, dto.requirementId);
@@ -86,7 +89,11 @@ export class FilesService {
               clientId,
               requirementId: dto.requirementId,
               uploadedById: actor.userId,
-              originalName: file.originalname.replace(/[\\/\r\n\0]/g, '_').slice(0, 200),
+              originalName:
+                file.originalname
+                  .replace(/[\\/\x00-\x1F\x7F]/g, '_')
+                  .trim()
+                  .slice(0, 200) || 'file',
               mimeType: file.mimetype,
               size: file.size,
               storageKey,
@@ -112,6 +119,7 @@ export class FilesService {
     }
   }
   async download(actor: Actor, id: string) {
+    assertPermissions(actor, 'file.read');
     const file = await this.prisma.clientFile.findFirst({
       where: { id, agencyId: actor.agencyId },
     });
@@ -121,11 +129,17 @@ export class FilesService {
     const bytes = await this.storage.read(file.storageKey);
     return new StreamableFile(bytes, {
       type: file.mimeType ?? 'application/octet-stream',
-      disposition: "attachment; filename*=UTF-8''" + encodeURIComponent(file.originalName),
+      disposition:
+        "attachment; filename*=UTF-8''" +
+        encodeURIComponent(file.originalName).replace(
+          /['()*]/g,
+          (character) => '%' + character.charCodeAt(0).toString(16).toUpperCase(),
+        ),
       length: bytes.length,
     });
   }
   async archive(actor: Actor, id: string) {
+    assertPermissions(actor, 'file.write');
     return this.prisma.$transaction(
       async (db) => {
         const file = await db.clientFile.findFirst({ where: { id, agencyId: actor.agencyId } });

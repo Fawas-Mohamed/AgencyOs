@@ -25,4 +25,11 @@ describe('upload validation', () => {
     expect(() =>
       validateFile(file('text/plain', Buffer.from([0, 255, 1])), 100, ['text/plain']),
     ).toThrow());
+
+  it.each([Buffer.from([255, 254]), Buffer.from([7, 9, 10])])(
+    'rejects malformed UTF-8 or binary control bytes declared as text',
+    (buffer) => {
+      expect(() => validateFile(file('text/plain', buffer), 100, ['text/plain'])).toThrow();
+    },
+  );
 });
