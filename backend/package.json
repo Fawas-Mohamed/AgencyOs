@@ -57,7 +57,7 @@
     "preset": "ts-jest",
     "testEnvironment": "node",
     "testMatch": [
-      "<rootDir>/src/**/*.spec.ts"
+      "**/src/**/*.spec.ts"
     ],
     "clearMocks": true
   }

@@ -255,6 +255,7 @@
   }
   .record-row,
   .notice,
+  .page-heading,
   .page-heading h1,
   .detail-grid dd {
     overflow-wrap: anywhere;
