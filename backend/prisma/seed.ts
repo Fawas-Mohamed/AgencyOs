@@ -166,8 +166,8 @@ async function seed() {
     const secondary = await seedDemoActor(prisma, {
       email: secondaryEmail,
       password: secondaryPassword,
-      agencyName: 'Agency OS isolation demonstration',
-      displayName: 'Isolation reviewer',
+      agencyName: 'Agency OS Admin',
+      displayName: 'Admin',
     });
     const isolatedClient =
       (await prisma.client.findFirst({
@@ -219,7 +219,7 @@ async function seed() {
         subject: 'Research discovery call',
         followUp: 'Prepare the first research brief for review.',
         summary: 'Agreed to prepare a structured research brief.',
-        participants: ['Nila Fernando', 'Isolation reviewer'],
+        participants: ['Nila Fernando', 'reviewer'],
         occurredAt: new Date().toISOString(),
         requirementId: isolatedRequirement.id,
       });
