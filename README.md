@@ -1,13 +1,12 @@
+# Agency OS Client Hub
 
-<<<<<<< HEAD
-=======
 Local, standalone implementation of the supplied Neirah Tech assignment. Both source PDFs were read completely (Common Standard v1.0: 16 pages; Hub Task: 7 pages). The repository initially contained only Git metadata; **no existing Client, ClientNote, auth, permission, audit or storage integration was available**. Canonical shared adapters are supplied and their replacement points are documented in [HANDOVER.md](docs/HANDOVER.md).
 
 The module provides client workspaces, structured requirements and ordered items, controlled review/confirmation/revisions, manual communications, private files/reference links, internal notes, chronological activity and immutable confirmed JSON packages. Other Agency OS business modules are outside this implementation.
 
 ## Prerequisites and versions
 
-- Node.js **22.22.2** used; supported project range 22.14–22.x; npm **11.1.0** used.
+- Node.js **22.22.2** used; supported project range 22.14–22.x; npm **11.21.0** used (Day 5).
 - Next.js **15.5.28** App Router, React **19.1.4**, TypeScript **5.9.3**, Tailwind **3.4.19**. Next 15 deliberately retains the required `frontend/middleware.ts` convention.
 - NestJS **11.2.7**, Prisma/client **6.19.3**, PostgreSQL **17**.
 - Jest **29**, Supertest and Playwright. Exact dependency versions are in the three package-lock files.
@@ -19,9 +18,9 @@ The module provides client workspaces, structured requirements and ordered items
 Run from the repository root in PowerShell:
 
 ```powershell
-npm ci
-npm ci --prefix backend
-npm ci --prefix frontend
+npm ci --no-audit --no-fund
+npm ci --prefix backend --no-audit --no-fund
+npm ci --prefix frontend --no-audit --no-fund
 node scripts/setup-local.mjs
 docker compose up -d
 ```
@@ -55,6 +54,8 @@ Open **http://localhost:3000**, sign in, and open Ceylon Craft Studio. Backend: 
 npm test --prefix backend
 npm run lint --prefix backend
 npm run lint --prefix frontend
+npm run typecheck --prefix backend
+npm run typecheck --prefix frontend
 npm run build --prefix backend
 npm run build --prefix frontend
 npm run format:check
@@ -151,4 +152,55 @@ node scripts/test-ui.mjs --grep foundation
 ```
 
 The foundation runner reads the configured development database, fingerprints all pre-existing rows in memory, seeds missing demo records twice, verifies that existing rows and confirmed history did not change, and starts/stops its own Nest HTTP listener. It never resets the database or prints credentials. The browser command uses the separate test database and verifies the shell at desktop/tablet/mobile sizes with two isolated cookie sessions. Both application builds must exist before browser checks.
->>>>>>> 6383f51 (update the files for database connection)
+
+## Day 2 requirement backend — 17 October 2026
+
+The existing canonical clients, requirement routes and Day 1 workflow/revision policy are retained. Requirement services now enforce their permission keys directly and return tenant-scoped current lockVersion/status on stale or serialized writes. See the [Day 2 report](docs/DAY_2_REPORT.md), [traceability](docs/DAY_2_TRACEABILITY.md) and expanded [API contract](API_DOCUMENTATION.md).
+
+Executed verification: npm test --prefix backend (67 passed), node scripts/test-api.mjs (79 passed on the corrected full run), backend build and lint. Test tooling uses only its dedicated test database and fixture agencies. Frontend/browser checks remain dated Day 1 for this backend-only request.
+
+## Day 3 supporting backend — 17 October 2026
+
+Manual communications, internal ClientNote discussion, private files/references, activity, bounded hub totals and approved-version export are documented in the [Day 3 report](docs/DAY_3_REPORT.md) and [traceability](docs/DAY_3_TRACEABILITY.md). Fresh checks: 96 unit tests, 109 PostgreSQL API tests, backend build/lint and frontend contract typecheck passed. No external sync or unrelated module was added.
+
+The [storage/retention guide](docs/STORAGE_AND_RETENTION.md) describes the replaceable PrivateStorage provider, private staged writes, failure cleanup and approved-history retention. From the repository root, `npm run storage:reconcile --prefix backend` performs a counts-only dry run. Apply is separate, local-only, and requires upload workers stopped as described in the guide. Day 3 ran only the real-environment dry run; it deleted nothing.
+
+## Day 4 frontend — 18 October 2026
+
+The full client hub uses real APIs with six workspace sections and separate requirement forms/review screens. It includes keyboard item ordering, retained form errors, unsaved-change dialogs, explicit conflict recovery, protected download retry, permission-aware actions and clear active/confirmed version history. See [Day 4 traceability](docs/DAY_4_TRACEABILITY.md) and [Day 4 report](docs/DAY_4_REPORT.md) for fresh results and screenshots.
+
+Run the full local workflow: create a client; create a requirement and ordered items; log a related communication and upload/reference supporting material; submit for review; confirm; download the confirmed package; reopen with a reason; edit the new draft; download the previous exact version from history. While a newer draft is unapproved, unversioned export is unavailable. Manual notes/communications remain separate from immutable approved content.
+
+After both builds, `node scripts/test-ui.mjs` checks Chrome at 375/768/1440 pixels. Use `--project=desktop` for a focused rerun. Source PDFs/logo, business data and database volumes remain local; setup, test and adapter limitations above still apply.
+
+## Isolated clean setup / existing PostgreSQL
+
+Extract the submission to a new directory. Install the three lockfiles with the npm ci commands above; do not copy node_modules or real environment files from another installation. An optional --offline flag uses a populated local npm cache. Python is not an application prerequisite.
+
+If the included Compose container/port already serves an existing checkout, preserve it. Instead, ask your local PostgreSQL administrator to create a NEW login role and two NEW empty databases owned by that role, with the test database name ending in \_test. Do not use reset or point setup at an existing business database. For example, in the administrator's local PostgreSQL session, use fresh names and your own random password:
+
+```sql
+CREATE ROLE assignment_demo LOGIN PASSWORD '<new-local-random-password>';
+CREATE DATABASE assignment_demo OWNER assignment_demo;
+CREATE DATABASE assignment_demo_test OWNER assignment_demo;
+```
+
+Run node scripts/setup-local.mjs in the extracted directory to generate safe local credentials. Before migrations, edit backend/.env locally: set DATABASE_URL and TEST_DATABASE_URL to the new role/databases, including the PostgreSQL host/port. Keep the generated random JWT and demo passwords. Do not run docker compose up for this existing-server option. The root Compose password is unused in this option.
+
+Then run prisma:generate, db:migrate and db:seed exactly as above. Start both dev commands in separate terminals, sign in using the generated local credentials, and follow [the reviewer demo](docs/REVIEWER_DEMO.md). If ports are occupied, change backend PORT and FRONTEND_URL, frontend API_INTERNAL_URL and APP_ORIGIN consistently, and run npm run dev --prefix frontend -- --port <free-port>. Host/port values must match the browser URL; do not expose the development servers externally.
+
+The hygiene tool supports extracted source without Git: it explicitly reports Git tracking/ignore checks UNRUN, then scans available configured credentials and browser bundles. This is distinct from package inventory verification.
+
+## Local submission packaging
+
+After verification and documentation, run from the working source:
+
+```powershell
+node scripts/package-submission.mjs submission/agencyos-client-hub-day5
+```
+
+The destination must be new; the script never deletes or overwrites a previous package. It copies only allowlisted module source, migrations, tests, lockfiles, safe examples, the original logo and documentation, writes a SHA-256 file manifest, and creates a local ZIP. It excludes Git, dependencies, build/cache output, real environment files, uploaded data and unrelated files. It checks included bytes against configured local secrets without printing them. Nothing is submitted externally. For a clean rehearsal copy without an archive, use a new .qa/name destination with --stage-only. Do not package the rehearsal's generated config or database data.
+
+## Day 5 acceptance and submission - 18 October 2026
+
+See [the final report](docs/DAY_5_REPORT.md), [PDF acceptance mapping](docs/DAY_5_TRACEABILITY.md), [reviewer demo](docs/REVIEWER_DEMO.md) and [technical handover](docs/HANDOVER.md). Final Day 5 results supersede earlier dated milestone counts above. This remains a locally demonstrated standalone module with explicit production adapter work; passing a build does not establish production readiness.
