@@ -5,8 +5,38 @@ import { execFileSync } from 'node:child_process';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const git = (args) =>
   execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim().split(/\r?\n/).filter(Boolean);
-const tracked = git(['ls-files']);
-const source = [...new Set(git(['ls-files', '--cached', '--others', '--exclude-standard']))];
+// A submission has no .git. Never discover a parent checkout accidentally.
+const checkout = existsSync(path.join(root, '.git'));
+const omitted = new Set([
+  '.git',
+  'node_modules',
+  '.next',
+  'dist',
+  'coverage',
+  '.data',
+  '.qa',
+  'submission',
+  'test-results',
+  'playwright-report',
+]);
+function sourceFiles(directory = root) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (omitted.has(entry.name) || entry.isSymbolicLink()) return [];
+    const name = path.join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(name);
+    if (
+      (entry.name.startsWith('.env') &&
+        !['.env.example', '.env.test.example'].includes(entry.name)) ||
+      /\.(log|tsbuildinfo|zip)$/.test(entry.name)
+    )
+      return [];
+    return [path.relative(root, name).replaceAll('\\', '/')];
+  });
+}
+const tracked = checkout ? git(['ls-files']) : [];
+const source = checkout
+  ? [...new Set(git(['ls-files', '--cached', '--others', '--exclude-standard']))]
+  : sourceFiles();
 let failed = false;
 const fail = (message) => {
   failed = true;
@@ -21,7 +51,9 @@ const forbidden = tracked.filter(
       !name.endsWith('.env.test.example')),
 );
 for (const name of forbidden) fail('Generated output or real environment file is tracked: ' + name);
-if (!forbidden.length) console.log('PASS: no generated output or real environment files tracked');
+if (checkout && !forbidden.length)
+  console.log('PASS: no generated output or real environment files tracked');
+if (!checkout) console.log('UNRUN: Git tracking/ignore checks (source-only submission; no .git)');
 const secrets = [];
 for (const relative of ['.env', 'backend/.env']) {
   const filename = path.join(root, relative);
@@ -48,7 +80,7 @@ for (const relative of ['.env', 'backend/.env']) {
     }
   }
 }
-for (const relative of ['.env', 'backend/.env', 'frontend/.env.local']) {
+for (const relative of checkout ? ['.env', 'backend/.env', 'frontend/.env.local'] : []) {
   if (!existsSync(path.join(root, relative))) continue;
   try {
     execFileSync('git', ['check-ignore', '--quiet', relative], { cwd: root, stdio: 'ignore' });

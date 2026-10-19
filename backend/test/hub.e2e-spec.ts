@@ -1998,4 +1998,78 @@ describe('client hub HTTP + PostgreSQL integration', () => {
       expect(reconciliation.retained).toBeGreaterThan(0);
     });
   });
+  describe('Day 5 acceptance boundaries', () => {
+    it.each(['clients', 'requirements', 'communications', 'notes', 'files', 'timeline'])(
+      'rejects overflowing pagination before querying %s',
+      async (resource) => {
+        const url = resource === 'clients' ? '/clients' : '/clients/' + clientA + '/' + resource;
+        for (const page of ['2147483647', '1e100', 'NaN']) {
+          const response = await get(url + '?page=' + page + '&limit=100');
+          expect({ status: response.status, body: response.body }).toMatchObject({
+            status: 400,
+            body: { success: false, code: 'VALIDATION_ERROR' },
+          });
+        }
+      },
+    );
+    it('makes foreign and nonexistent record errors indistinguishable across reads and writes', async () => {
+      const absent = randomUUID();
+      for (const endpoint of [
+        'hub',
+        'requirements',
+        'communications',
+        'notes',
+        'files',
+        'timeline',
+      ]) {
+        const foreign = await get('/clients/' + clientB + '/' + endpoint);
+        const missing = await get('/clients/' + absent + '/' + endpoint);
+        expect(foreign.status).toBe(404);
+        expect(foreign.body).toEqual(missing.body);
+      }
+      for (const suffix of ['', '/export', '/export?version=1']) {
+        const foreign = await get('/requirements/' + reqB + suffix);
+        const missing = await get('/requirements/' + absent + suffix);
+        expect(foreign.status).toBe(404);
+        expect(foreign.body).toEqual(missing.body);
+      }
+      const foreignFile = await get('/files/' + fileB + '/download');
+      const missingFile = await get('/files/' + absent + '/download');
+      expect(foreignFile.status).toBe(404);
+      expect(foreignFile.body).toEqual(missingFile.body);
+      for (const change of [
+        { path: '', data: { ...content, expectedVersion: 1 } },
+        { path: '/status', data: { status: 'UNDER_REVIEW', expectedVersion: 1 } },
+      ]) {
+        const foreign = await patch('/requirements/' + reqB + change.path, change.data);
+        const missing = await patch('/requirements/' + absent + change.path, change.data);
+        expect(foreign.status).toBe(404);
+        expect(foreign.body).toEqual(missing.body);
+      }
+      const foreignCreate = await post('/clients/' + clientB + '/requirements', content);
+      const missingCreate = await post('/clients/' + absent + '/requirements', content);
+      expect(foreignCreate.status).toBe(404);
+      expect(foreignCreate.body).toEqual(missingCreate.body);
+      const search = await get('/clients?q=Private%20B%20client');
+      expect(search.body.data.items).toEqual([]);
+      expect(JSON.stringify(search.body)).not.toContain(clientB);
+    });
+    it('does not echo malformed JSON content, secrets, database names or stack traces', async () => {
+      const marker = 'private-input-' + randomUUID();
+      const response = await request(app.getHttpServer())
+        .post('/api/clients')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .set('Content-Type', 'application/json')
+        .send('{"name":"' + marker + '"');
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        details: {},
+      });
+      expect(JSON.stringify(response.body)).not.toMatch(
+        new RegExp(marker + '|Prisma|stack|password|postgresql'),
+      );
+    });
+  });
 });

@@ -5,3 +5,6 @@ coverage
 package-lock.json
 frontend/public
 backend/prisma/migrations
+
+.qa/
+submission/

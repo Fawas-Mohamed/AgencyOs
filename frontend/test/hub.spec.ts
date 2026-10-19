@@ -163,6 +163,28 @@ test('client, structured requirement, review, revision, communication, private f
   await expect(
     page.getByRole('button', { name: 'Confirm requirement', exact: true }),
   ).toBeVisible();
+  await page
+    .getByLabel('Reason / review note', { exact: true })
+    .fill('Please clarify order and client wording.');
+  await page.getByRole('button', { name: 'Request changes', exact: true }).click();
+  await expect(
+    page.getByText('Active version: 1 \u00b7 Changes Requested', { exact: true }),
+  ).toBeVisible();
+  await page.getByRole('link', { name: 'Edit requirement', exact: true }).click();
+  await page.getByLabel('Item title', { exact: true }).nth(1).fill('Guided brief clarified');
+  await page.getByRole('button', { name: 'Move item 1 down', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Item title', { exact: true }).nth(1)).toBeFocused();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Verified client portal', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('link', { name: 'Review requirement', exact: true }).click();
+  await expect(page).toHaveURL(requirementUrl + '/review');
+  await page.getByRole('button', { name: 'Submit for review', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Confirm requirement', exact: true }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Confirm requirement', exact: true }).click();
   await page
     .getByRole('dialog')
@@ -216,7 +238,7 @@ test('client, structured requirement, review, revision, communication, private f
   expect(approved.internal.assumptions).toBe(
     'Internal assumption: existing identity adapter is available.',
   );
-  expect(approved.items[0]).toMatchObject({
+  expect(approved.items[1]).toMatchObject({
     description: 'Preserve every approved version.',
     category: 'Functional',
     priority: 'MUST_HAVE',
@@ -226,14 +248,38 @@ test('client, structured requirement, review, revision, communication, private f
     expect.arrayContaining(['verified-brief.txt', 'Approved inspiration']),
   );
   expect(approved.items.map((item: { title: string }) => item.title)).toEqual([
+    'Guided brief clarified',
     'Approval history',
-    'Guided brief',
   ]);
   expect(
     (await context.request.get('/api/requirements/' + requirementId + '/export')).status(),
   ).toBe(409);
   await expect(page.getByText('Active version: 2 · Draft', { exact: true })).toBeVisible();
   await expect(page.getByText('Last confirmed version: 1', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Review requirement', exact: true }).click();
+  await expect(page).toHaveURL(requirementUrl + '/review');
+  await page
+    .getByLabel('Reason / review note', { exact: true })
+    .fill('Archive this unapproved revision after preserving approved version 1.');
+  await page.getByRole('button', { name: 'Archive requirement', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Archive requirement', exact: true })
+    .click();
+  await expect(page.getByText('Active version: 2 \u00b7 Archived', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Edit requirement', exact: true })).toHaveCount(0);
+  const preserved = await context.request.get(
+    '/api/requirements/' + requirementId + '/export?version=1',
+  );
+  expect((await preserved.json()).data).toEqual(originalApproved);
+  expect(
+    (await context.request.get('/api/requirements/' + requirementId + '/export')).status(),
+  ).toBe(409);
+  const [historical] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Download version 1', exact: true }).click(),
+  ]);
+  expect(historical.suggestedFilename()).toContain('-v1.json');
   await page.goto(clientUrl + '?tab=timeline');
   await expect(page.getByText('Private file uploaded', { exact: true })).toBeVisible();
   await page.getByLabel('Timeline order', { exact: true }).selectOption('oldest');
